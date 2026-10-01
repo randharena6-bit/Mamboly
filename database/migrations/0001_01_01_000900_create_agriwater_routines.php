@@ -175,7 +175,7 @@ return new class extends Migration
                       AND wm.quantity_after  = NEW.available_quantity
                ) THEN
                 RAISE EXCEPTION
-                    'RM-09 : variation du stock de « % » (%.2f -> %.2f) sans mouvement d''eau traçable correspondant',
+                    'RM-09 : variation du stock de « % » (% -> %) sans mouvement d''eau traçable correspondant',
                     NEW.name, OLD.available_quantity, NEW.available_quantity
                     USING ERRCODE = 'check_violation';
             END IF;
