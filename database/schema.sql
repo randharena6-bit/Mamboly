@@ -199,67 +199,58 @@ RETURNS text
 LANGUAGE plpgsql
     SET search_path = agriwater, public AS $$
 DECLARE
-    c_conf   CONSTANT record := (
-        SELECT c.relname AS parent,
-               (SELECT a.attname
-                  FROM pg_attribute a
-                 WHERE a.attrelid = c.oid
-                   AND a.attnum > 0
-                   AND NOT a.attisdropped
-                   AND a.attname = CASE c.relname
-                       WHEN 'water_movements' THEN 'movement_date'
-                       WHEN 'activities'      THEN 'activity_date'
-                       WHEN 'activity_logs'   THEN 'created_at'
-                   END) AS key_col,
-               (SELECT array_agg(i.indexrelid) FROM pg_index i WHERE i.indrelid = c.oid) AS indexes
-          FROM pg_class c
-          JOIN pg_namespace n ON n.oid = c.relnamespace
-         WHERE n.nspname = 'agriwater'
-           AND c.relname = p_table
-           AND c.relkind = 'p');
-    v_name   text;
-    v_lo     timestamptz := date_trunc('month', p_month)::timestamptz;
-    v_hi     timestamptz := (date_trunc('month', p_month) + interval '1 month')::timestamptz;
-    v_stag   text;
+    v_parent  text;
+    v_key     text;
+    v_part    text;
+    v_name    text;
+    v_lo      timestamptz := date_trunc('month', p_month)::timestamptz;
+    v_hi      timestamptz := (date_trunc('month', p_month) + interval '1 month')::timestamptz;
+    v_stag    text;
 BEGIN
-    IF c_conf.parent IS NULL OR c_conf.key_col IS NULL THEN
-        RAISE EXCEPTION 'Table non partitionnée ou clé inconnue : %', p_table
+    IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'agriwater' AND c.relname = p_table AND c.relkind = 'p') THEN
+        RAISE EXCEPTION 'Table non partitionnée : %', p_table
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
-    v_name := format('%I', p_table || '_' || to_char(p_month, 'YYYY_MM'));
-
-    IF EXISTS (SELECT 1 FROM pg_class x
-                JOIN pg_namespace xn ON xn.oid = x.relnamespace
-               WHERE xn.nspname = 'agriwater' AND x.relname = p_table || '_' || to_char(p_month, 'YYYY_MM')) THEN
-        RETURN p_table || '_' || to_char(p_month, 'YYYY_MM');   -- déjà en place
+    -- colonne de partitionnement, dérivée du nom de la table
+    v_key := CASE p_table
+                WHEN 'water_movements' THEN 'movement_date'
+                WHEN 'activities'      THEN 'activity_date'
+                WHEN 'activity_logs'   THEN 'created_at'
+             END;
+    IF v_key IS NULL THEN
+        RAISE EXCEPTION 'Table non partitionnée gérée : %', p_table
+            USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
-    v_stag := format('%I', p_table || '_staging_' || to_char(p_month, 'YYYY_MM'));
+    v_name := p_table || '_' || to_char(p_month, 'YYYY_MM');
+    IF to_regclass('agriwater.' || quote_ident(v_name)) IS NOT NULL THEN
+        RETURN v_name;                                  -- déjà en place
+    END IF;
+
+    v_stag := p_table || '_staging_' || to_char(p_month, 'YYYY_MM');
 
     -- 1. table autonome, calque de la table partitionnée
-    EXECUTE format('CREATE TABLE agriwater.%I (LIKE agriwater.%I)', v_stag, c_conf.parent);
+    EXECUTE format('CREATE TABLE agriwater.%I (LIKE agriwater.%I INCLUDING CONSTRAINTS)', v_stag, p_table);
 
     -- 2. bascule des lignes éventuellement stockées dans la partition par défaut
-    IF EXISTS (SELECT 1 FROM pg_class x
-                JOIN pg_namespace xn ON xn.oid = x.relnamespace
-               WHERE xn.nspname = 'agriwater' AND x.relname = p_table || '_default') THEN
+    v_part := p_table || '_default';
+    IF to_regclass('agriwater.' || quote_ident(v_part)) IS NOT NULL THEN
         EXECUTE format(
             'WITH moved AS (
-                 DELETE FROM agriwater.%I
-                  WHERE %I >= $1 AND %I < $2
-                 RETURNING *
+                 DELETE FROM agriwater.%I WHERE %I >= $1 AND %I < $2 RETURNING *
              ) INSERT INTO agriwater.%I SELECT * FROM moved',
-            p_table || '_default', c_conf.key_col, c_conf.key_col, v_stag)
+            v_part, v_key, v_key, v_stag)
         USING v_lo, v_hi;
     END IF;
 
-    -- 3. rattachement (les index du parent sont propagés automatiquement)
+    -- 3. rattachement : PostgreSQL revalide le périmètre et propage les index
     EXECUTE format(
         'ALTER TABLE agriwater.%I ATTACH PARTITION agriwater.%I FOR VALUES FROM (%L) TO (%L)',
-        c_conf.parent, v_stag, v_lo, v_hi);
+        p_table, v_stag, v_lo, v_hi);
 
-    RETURN p_table || '_' || to_char(p_month, 'YYYY_MM');
+    RETURN v_name;
 END;
 $$;
 
