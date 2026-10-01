@@ -7,13 +7,21 @@
 --  Réf. modèle : 19 entités, 40 associations, 13 règles métier (RM-01 à RM-13)
 --  Compatible  : PostgreSQL 13+ (testé sur 16)
 --
+--  Organisation en deux schémas SQL :
+--    • agriwater : domaine métier (18 tables, types, domaines, fonctions,
+--                  vues, triggers). Toutes les vues du tableau de bord.
+--    • public    : infrastructure Laravel (sessions, cache, files de jobs,
+--                  notifications). Aucun objet métier n'y réside.
+--
 --  Contenu :
---    1. Types ENUM natifs
---    2. Tables métier (17) + tables techniques Laravel (5)
+--    1. Types ENUM natifs + types DOMAIN (cohérence des unités)
+--    2. Tables métier partitionnées (water_movements, activities, activity_logs)
 --    3. Contraintes d'intégrité (CHECK, FK, UNIQUE) des règles métier
 --    4. Index
 --    5. Fonctions + triggers de traçabilité et de contrôle métier
---    6. Vues du tableau de bord et du score de priorité d'irrigation
+--    6. Procédures métier (irrigation, planification, clôture de campagne)
+--    7. Vues du tableau de bord et du score de priorité d'irrigation
+--    8. Documentation de toutes les colonnes (COMMENT ON COLUMN)
 --
 --  Rebuild :  psql -U agriwater -d agriwater -f database/schema.sql
 -- =============================================================================
@@ -21,11 +29,21 @@
 BEGIN;
 
 -- Nettoyage total (idempotence)
-DROP SCHEMA public CASCADE;
-CREATE SCHEMA public;
-GRANT ALL ON SCHEMA public TO agriwater;
-GRANT ALL ON SCHEMA public TO public;
-SET search_path TO public;
+DROP SCHEMA IF EXISTS agriwater CASCADE;
+DROP TABLE IF EXISTS public.password_reset_tokens, public.sessions, public.cache,
+                     public.cache_locks, public.jobs, public.job_batches,
+                     public.failed_jobs, public.notifications CASCADE;
+
+CREATE SCHEMA agriwater AUTHORIZATION agriwater;
+COMMENT ON SCHEMA agriwater IS
+    'Domaine métier AgriWater : exploitations, eau, campagnes, finance, journal d''audit.';
+
+GRANT ALL ON SCHEMA agriwater TO agriwater;
+GRANT ALL ON SCHEMA public   TO agriwater;
+GRANT ALL ON SCHEMA public   TO public;
+
+-- Toutes les écritures non qualifiées de ce fichier visent agriwater.
+SET search_path TO agriwater, public;
 
 
 -- =============================================================================
@@ -76,12 +94,48 @@ CREATE TYPE alert_severity     AS ENUM ('info', 'avertissement', 'critique');
 
 
 -- =============================================================================
+--  1b. TYPES DOMAIN — cohérent par construction, pas seulement par convention
+--
+--  Un domaine PostgreSQL porte une contrainte qui s'applique partout où la
+--  colonne est utilisée : impossible d'enregistrer un montant négatif ou une
+--  surface aberrante, même en contournant l'application.
+-- =============================================================================
+
+-- Montant en Ariary (2 décimales, jamais négatif)
+CREATE DOMAIN montant AS numeric(14,2)
+    CONSTRAINT montant_non_negatif CHECK (VALUE >= 0)
+    CONSTRAINT montant_plafond      CHECK (VALUE < 1000000000000);
+COMMENT ON DOMAIN montant IS 'Montant monétaire en Ariary, non négatif.';
+
+-- Quantité physique mesurée (eau en L, intrants en kg/L/m) : jamais négative
+CREATE DOMAIN quantite AS numeric(14,2)
+    CONSTRAINT quantite_non_negative CHECK (VALUE >= 0);
+COMMENT ON DOMAIN quantite IS 'Quantité physique non négative (unité portée par une colonne voisine).';
+
+-- Surface exprimée en m² (normalisée par agriwater_to_m2)
+CREATE DOMAIN surface_m2 AS numeric(14,2)
+    CONSTRAINT surface_m2_non_negative CHECK (VALUE >= 0);
+COMMENT ON DOMAIN surface_m2 IS 'Surface en mètres carrés, non négative.';
+
+-- Pourcentage 0-100 (humidité du sol, taux de réalisation)
+CREATE DOMAIN pourcentage AS numeric(5,2)
+    CONSTRAINT pourcentage_borné CHECK (VALUE BETWEEN 0 AND 100);
+COMMENT ON DOMAIN pourcentage IS 'Pourcentage entre 0 et 100.';
+
+-- Durée en minutes
+CREATE DOMAIN duree_minutes AS integer
+    CONSTRAINT duree_minutes_positive CHECK (VALUE > 0);
+COMMENT ON DOMAIN duree_minutes IS 'Durée en minutes, strictement positive.';
+
+
+-- =============================================================================
 --  2. FONCTIONS UTILITAIRES
 -- =============================================================================
 
 -- 2.1 Mise à jour automatique de updated_at
 CREATE OR REPLACE FUNCTION agriwater_set_updated_at() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 BEGIN
     NEW.updated_at := now();
     RETURN NEW;
@@ -90,14 +144,16 @@ $$;
 
 -- 2.2 Conversion de superficie en m² (normalisation m² / hectare)
 CREATE OR REPLACE FUNCTION agriwater_to_m2(area numeric, unit area_unit) RETURNS numeric
-LANGUAGE sql IMMUTABLE AS $$
+LANGUAGE sql IMMUTABLE
+    SET search_path = agriwater, public AS $$
     SELECT CASE unit WHEN 'ha' THEN area * 10000 ELSE area END;
 $$;
 
 -- 2.3 Seuil (en litres) au-delà duquel un agent doit faire valider son irrigation
 --     Surchargeable : ALTER DATABASE agriwater SET agriwater.manager_validation_threshold = '2000';
 CREATE OR REPLACE FUNCTION agriwater_manager_validation_threshold() RETURNS numeric
-LANGUAGE plpgsql STABLE AS $$
+LANGUAGE plpgsql STABLE
+    SET search_path = agriwater, public AS $$
 DECLARE
     v text;
 BEGIN
@@ -113,13 +169,150 @@ $$;
 
 -- 2.4 Poids numérique de la priorité manuelle (module personnel § 6.10)
 CREATE OR REPLACE FUNCTION agriwater_priority_weight(p priority_level) RETURNS integer
-LANGUAGE sql IMMUTABLE AS $$
+LANGUAGE sql IMMUTABLE
+    SET search_path = agriwater, public AS $$
     SELECT CASE p
         WHEN 'faible'   THEN 0
         WHEN 'normale'  THEN 10
         WHEN 'elevee'   THEN 20
         WHEN 'critique' THEN 30
     END;
+$$;
+
+-- 2.5 Gestion automatique du partitionnement
+--
+--     Trois tables append-only sont partitionnées par mois :
+--       water_movements (movement_date), activities (activity_date),
+--       activity_logs (created_at).
+--
+--     CREATE TABLE ... PARTITION OF échoue si la partition par défaut contient
+--     déjà des lignes de la période visée. On procède donc en trois temps :
+--       1. table autonome intermédiaire,
+--       2. bascule des lignes concernées depuis la partition par défaut,
+--       3. ATTACH PARTITION (PostgreSQL revalide le périmètre et crée les index).
+--
+--     C'est le même algorithme que pg_partman, sans extension à installer.
+
+-- 2.5.1 Crée (si besoin) la partition mensuelle d'une table partitionnée
+CREATE OR REPLACE FUNCTION agriwater_create_month_partition(p_table text, p_month date)
+RETURNS text
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+DECLARE
+    c_conf   CONSTANT record := (
+        SELECT c.relname AS parent,
+               (SELECT a.attname
+                  FROM pg_attribute a
+                 WHERE a.attrelid = c.oid
+                   AND a.attnum > 0
+                   AND NOT a.attisdropped
+                   AND a.attname = CASE c.relname
+                       WHEN 'water_movements' THEN 'movement_date'
+                       WHEN 'activities'      THEN 'activity_date'
+                       WHEN 'activity_logs'   THEN 'created_at'
+                   END) AS key_col,
+               (SELECT array_agg(i.indexrelid) FROM pg_index i WHERE i.indrelid = c.oid) AS indexes
+          FROM pg_class c
+          JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = 'agriwater'
+           AND c.relname = p_table
+           AND c.relkind = 'p');
+    v_name   text;
+    v_lo     timestamptz := date_trunc('month', p_month)::timestamptz;
+    v_hi     timestamptz := (date_trunc('month', p_month) + interval '1 month')::timestamptz;
+    v_stag   text;
+BEGIN
+    IF c_conf.parent IS NULL OR c_conf.key_col IS NULL THEN
+        RAISE EXCEPTION 'Table non partitionnée ou clé inconnue : %', p_table
+            USING ERRCODE = 'invalid_parameter_value';
+    END IF;
+
+    v_name := format('%I', p_table || '_' || to_char(p_month, 'YYYY_MM'));
+
+    IF EXISTS (SELECT 1 FROM pg_class x
+                JOIN pg_namespace xn ON xn.oid = x.relnamespace
+               WHERE xn.nspname = 'agriwater' AND x.relname = p_table || '_' || to_char(p_month, 'YYYY_MM')) THEN
+        RETURN p_table || '_' || to_char(p_month, 'YYYY_MM');   -- déjà en place
+    END IF;
+
+    v_stag := format('%I', p_table || '_staging_' || to_char(p_month, 'YYYY_MM'));
+
+    -- 1. table autonome, calque de la table partitionnée
+    EXECUTE format('CREATE TABLE agriwater.%I (LIKE agriwater.%I)', v_stag, c_conf.parent);
+
+    -- 2. bascule des lignes éventuellement stockées dans la partition par défaut
+    IF EXISTS (SELECT 1 FROM pg_class x
+                JOIN pg_namespace xn ON xn.oid = x.relnamespace
+               WHERE xn.nspname = 'agriwater' AND x.relname = p_table || '_default') THEN
+        EXECUTE format(
+            'WITH moved AS (
+                 DELETE FROM agriwater.%I
+                  WHERE %I >= $1 AND %I < $2
+                 RETURNING *
+             ) INSERT INTO agriwater.%I SELECT * FROM moved',
+            p_table || '_default', c_conf.key_col, c_conf.key_col, v_stag)
+        USING v_lo, v_hi;
+    END IF;
+
+    -- 3. rattachement (les index du parent sont propagés automatiquement)
+    EXECUTE format(
+        'ALTER TABLE agriwater.%I ATTACH PARTITION agriwater.%I FOR VALUES FROM (%L) TO (%L)',
+        c_conf.parent, v_stag, v_lo, v_hi);
+
+    RETURN p_table || '_' || to_char(p_month, 'YYYY_MM');
+END;
+$$;
+
+COMMENT ON FUNCTION agriwater_create_month_partition(text, date) IS
+    'Crée la partition mensuelle manquante d''une table partitionnée et y bascule les lignes de la partition par défaut.';
+
+-- 2.5.2 Prépare les N prochains mois (rolling window)
+CREATE OR REPLACE FUNCTION agriwater_prepare_partitions(p_months integer DEFAULT 6)
+RETURNS integer
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+DECLARE
+    m   date;
+    n   integer := 0;
+    t   text;
+BEGIN
+    FOR m IN SELECT generate_series(
+                    date_trunc('month', CURRENT_DATE)::date,
+                    date_trunc('month', CURRENT_DATE)::date + (p_months || ' months')::interval,
+                    interval '1 month')::date
+             LOOP
+        FOREACH t IN ARRAY ARRAY['water_movements', 'activities', 'activity_logs'] LOOP
+            PERFORM agriwater_create_month_partition(t, m);
+            n := n + 1;
+        END LOOP;
+    END LOOP;
+    RETURN n;
+END;
+$$;
+
+COMMENT ON FUNCTION agriwater_prepare_partitions(integer) IS
+    'Crée à l''avance les partitions mensuelles sur une fenêtre glissante (appelée par agriwater_maintenance).';
+
+-- 2.5.3 Remplit une plage de partitions donnée (bootstrap et tests)
+CREATE OR REPLACE FUNCTION agriwater_prepare_partitions_from(p_from date, p_to date)
+RETURNS integer
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+DECLARE
+    m date;
+    n integer := 0;
+BEGIN
+    FOR m IN SELECT generate_series(date_trunc('month', p_from)::date,
+                                   date_trunc('month', p_to)::date,
+                                   interval '1 month')::date
+             LOOP
+        PERFORM agriwater_create_month_partition('water_movements', m);
+        PERFORM agriwater_create_month_partition('activities',      m);
+        PERFORM agriwater_create_month_partition('activity_logs',   m);
+        n := n + 3;
+    END LOOP;
+    RETURN n;
+END;
 $$;
 
 
@@ -152,7 +345,7 @@ CREATE TABLE farms (
     name       varchar(150) NOT NULL,
     location   varchar(255) NOT NULL,
     type       varchar(50)  NOT NULL DEFAULT 'maraichage',
-    total_area numeric(12,2) NOT NULL DEFAULT 0,
+    total_area surface_m2 NOT NULL DEFAULT 0,
     manager_id bigint,                    -- FK ajoutée plus bas (§ 3.22)
     status     farm_status NOT NULL DEFAULT 'active',
     created_at timestamptz  NOT NULL DEFAULT now(),
@@ -197,7 +390,7 @@ CREATE TABLE crops (
     name                    varchar(100) NOT NULL,
     category                varchar(50)  NOT NULL,
     estimated_duration_days integer      NOT NULL,
-    water_requirement       numeric(10,2) NOT NULL DEFAULT 0,
+    water_requirement       quantite  NOT NULL DEFAULT 0,
     production_unit         varchar(30)  NOT NULL DEFAULT 'kg',
     status                  crop_status  NOT NULL DEFAULT 'actif',
     created_at              timestamptz  NOT NULL DEFAULT now(),
@@ -217,13 +410,13 @@ CREATE TABLE plots (
     farm_id         bigint       NOT NULL,
     code            varchar(50)  NOT NULL,
     name            varchar(150) NOT NULL,
-    area            numeric(12,2) NOT NULL,
+    area            surface_m2  NOT NULL,
     area_unit       area_unit    NOT NULL DEFAULT 'm2',
     location        varchar(255),
     soil_type       varchar(100),
     status          plot_status  NOT NULL DEFAULT 'disponible',
     manual_priority priority_level NOT NULL DEFAULT 'normale',   -- module personnel § 6.10
-    soil_moisture   numeric(5,2),                                -- module personnel § 6.10
+    soil_moisture   pourcentage,                                -- module personnel § 6.10
     created_at      timestamptz  NOT NULL DEFAULT now(),
     updated_at      timestamptz  NOT NULL DEFAULT now(),
     CONSTRAINT plots_farm_id_fkey FOREIGN KEY (farm_id) REFERENCES farms (id) ON DELETE CASCADE,
@@ -248,7 +441,7 @@ CREATE TABLE campaigns (
     start_date        date         NOT NULL,
     expected_end_date date         NOT NULL,
     actual_end_date   date,
-    area              numeric(12,2) NOT NULL,
+    area              surface_m2  NOT NULL,
     status            campaign_status NOT NULL DEFAULT 'planifiee',
     notes             text,
     created_at        timestamptz  NOT NULL DEFAULT now(),
@@ -273,10 +466,10 @@ CREATE TABLE water_sources (
     farm_id             bigint        NOT NULL,
     name                varchar(150)  NOT NULL,
     type                water_source_type NOT NULL,
-    capacity            numeric(14,2) NOT NULL,
-    available_quantity  numeric(14,2) NOT NULL DEFAULT 0,
+    capacity            quantite   NOT NULL,
+    available_quantity  quantite   NOT NULL DEFAULT 0,
     unit                water_unit    NOT NULL DEFAULT 'L',
-    critical_threshold  numeric(14,2) NOT NULL DEFAULT 0,
+    critical_threshold  quantite   NOT NULL DEFAULT 0,
     location            varchar(255),
     status              water_source_status NOT NULL DEFAULT 'active',
     created_at          timestamptz   NOT NULL DEFAULT now(),
@@ -306,7 +499,7 @@ CREATE TABLE irrigation_schedules (
     agent_id            bigint        NOT NULL,
     scheduled_date      date          NOT NULL,
     scheduled_time      time,
-    estimated_quantity  numeric(14,2) NOT NULL,
+    estimated_quantity  quantite   NOT NULL,
     priority            priority_level NOT NULL DEFAULT 'normale',
     status              schedule_status NOT NULL DEFAULT 'planifiee',
     comment             text,
@@ -335,9 +528,9 @@ CREATE TABLE irrigations (
     validated_by      bigint,                    -- responsable validateur (RM-10)
     scheduled_at      timestamptz,
     performed_at      timestamptz  NOT NULL DEFAULT now(),
-    quantity          numeric(14,2) NOT NULL,
+    quantity          quantite      NOT NULL,
     unit              water_unit   NOT NULL DEFAULT 'L',
-    duration_minutes  integer,
+    duration_minutes  duree_minutes,
     method            irrigation_method NOT NULL,
     status            irrigation_status  NOT NULL DEFAULT 'brouillon',
     observation       text,
@@ -358,18 +551,23 @@ COMMENT ON TABLE irrigations IS 'Séances d''irrigation. Toute ligne consomme le
 
 -- -----------------------------------------------------------------------------
 --  3.10 water_movements — Journal traçable des mouvements d'eau (CDC § 6.7, RM-09)
+--       TABLE PARTITIONNÉE par mois (RANGE sur movement_date) :
+--       le journal ne fait que croître, jamais de mise à jour ni de suppression
+--       hors purge. Partitionner permet de purger un mois par DETACH en O(1),
+--       d'indexer chaque tranche à la taille du lot, et d'éviter que la table
+--       n'enfle au point de dégrader les index.
 -- -----------------------------------------------------------------------------
 CREATE TABLE water_movements (
-    id              bigserial PRIMARY KEY,
+    id              bigserial   NOT NULL,
     farm_id         bigint       NOT NULL,
     water_source_id bigint       NOT NULL,
     campaign_id     bigint,
     irrigation_id   bigint,
     user_id         bigint       NOT NULL,
     type            water_movement_type NOT NULL,
-    quantity        numeric(14,2) NOT NULL,
-    quantity_before numeric(14,2) NOT NULL,
-    quantity_after  numeric(14,2) NOT NULL,
+    quantity        quantite NOT NULL,
+    quantity_before quantite NOT NULL,
+    quantity_after  quantite NOT NULL,
     movement_date   timestamptz  NOT NULL DEFAULT now(),
     note            text,
     created_at      timestamptz  NOT NULL DEFAULT now(),
@@ -384,16 +582,21 @@ CREATE TABLE water_movements (
     CONSTRAINT water_movements_after_check  CHECK (quantity_after  >= 0),
     CONSTRAINT water_movements_delta_check
         CHECK (quantity_after = quantity_before + quantity
-            OR quantity_after = quantity_before - quantity)
-);
+            OR quantity_after = quantity_before - quantity),
+    -- La clé primaire inclut la clé de partition : contrainte imposée par PostgreSQL
+    -- qui garantit qu'une clé de ligne est unique dans TOUTE la table partitionnée.
+    CONSTRAINT water_movements_pkey PRIMARY KEY (id, movement_date)
+) PARTITION BY RANGE (movement_date);
 
-COMMENT ON TABLE water_movements IS 'Journal append-only. Une entrée par variation de water_sources.available_quantity (RM-09).';
+COMMENT ON TABLE water_movements IS 'Journal append-only partitionné par mois. Une entrée par variation de water_sources.available_quantity (RM-09).';
 
 -- -----------------------------------------------------------------------------
 --  3.11 activities — Activités techniques (CDC § 6.11)
 -- -----------------------------------------------------------------------------
+--       TABLE PARTITIONNÉE par mois (RANGE sur activity_date) : même logique
+--       que water_movements (écriture seule, forte volumétrie, purge par période).
 CREATE TABLE activities (
-    id            bigserial PRIMARY KEY,
+    id            bigserial NOT NULL,
     farm_id       bigint      NOT NULL,
     campaign_id   bigint,
     plot_id       bigint      NOT NULL,
@@ -401,17 +604,18 @@ CREATE TABLE activities (
     type          activity_type NOT NULL,
     activity_date date        NOT NULL,
     description   text,
-    cost          numeric(12,2),
+    cost          montant,
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT activities_farm_id_fkey     FOREIGN KEY (farm_id)   REFERENCES farms (id)     ON DELETE CASCADE,
     CONSTRAINT activities_campaign_id_fkey FOREIGN KEY (campaign_id) REFERENCES campaigns (id) ON DELETE SET NULL,
     CONSTRAINT activities_plot_id_fkey     FOREIGN KEY (plot_id)   REFERENCES plots (id)     ON DELETE RESTRICT,
     CONSTRAINT activities_user_id_fkey     FOREIGN KEY (user_id)   REFERENCES users (id)     ON DELETE RESTRICT,
-    CONSTRAINT activities_cost_check CHECK (cost IS NULL OR cost >= 0)
-);
+    CONSTRAINT activities_cost_check CHECK (cost IS NULL OR cost >= 0),
+    CONSTRAINT activities_pkey PRIMARY KEY (id, activity_date)
+) PARTITION BY RANGE (activity_date);
 
-COMMENT ON TABLE activities IS 'Activités techniques : semis, fertilisation, récolte, irrigation…';
+COMMENT ON TABLE activities IS 'Activités techniques partitionnées par mois : semis, fertilisation, récolte, irrigation…';
 
 -- -----------------------------------------------------------------------------
 --  3.12 inputs — Intrants agricoles (CDC § 6.12)
@@ -422,9 +626,9 @@ CREATE TABLE inputs (
     name               varchar(150)   NOT NULL,
     category           input_category NOT NULL,
     unit               varchar(20)    NOT NULL DEFAULT 'kg',
-    minimum_threshold  numeric(12,2)  NOT NULL DEFAULT 0,
-    available_quantity numeric(12,2)  NOT NULL DEFAULT 0,
-    unit_price         numeric(12,2)  NOT NULL DEFAULT 0,
+    minimum_threshold  quantite NOT NULL DEFAULT 0,
+    available_quantity quantite NOT NULL DEFAULT 0,
+    unit_price         montant NOT NULL DEFAULT 0,
     supplier           varchar(150),
     status             input_status   NOT NULL DEFAULT 'actif',
     created_at         timestamptz    NOT NULL DEFAULT now(),
@@ -449,9 +653,9 @@ CREATE TABLE stock_movements (
     campaign_id   bigint,
     user_id       bigint   NOT NULL,
     type          stock_movement_type NOT NULL,
-    quantity      numeric(12,2) NOT NULL,
-    stock_before  numeric(12,2) NOT NULL,
-    stock_after   numeric(12,2) NOT NULL,
+    quantity      quantite NOT NULL,
+    stock_before  quantite NOT NULL,
+    stock_after   quantite NOT NULL,
     movement_date timestamptz NOT NULL DEFAULT now(),
     note          text,
     created_at    timestamptz NOT NULL DEFAULT now(),
@@ -478,10 +682,10 @@ CREATE TABLE harvests (
     user_id       bigint       NOT NULL,
     product       varchar(150) NOT NULL,
     harvest_date  date         NOT NULL,
-    quantity      numeric(12,2) NOT NULL,
-    unit          varchar(20)  NOT NULL DEFAULT 'kg',
+    quantity      quantite  NOT NULL,
+    unit          varchar(20) NOT NULL DEFAULT 'kg',
     quality       varchar(50),
-    loss_quantity numeric(12,2) NOT NULL DEFAULT 0,
+    loss_quantity quantite  NOT NULL DEFAULT 0,
     observation   text,
     created_at    timestamptz  NOT NULL DEFAULT now(),
     updated_at    timestamptz  NOT NULL DEFAULT now(),
@@ -504,7 +708,7 @@ CREATE TABLE expenses (
     campaign_id  bigint,
     user_id      bigint NOT NULL,
     expense_date date   NOT NULL,
-    amount       numeric(12,2) NOT NULL,
+    amount       montant NOT NULL,
     category     expense_category NOT NULL,
     description  text,
     receipt_path varchar(255),
@@ -528,9 +732,9 @@ CREATE TABLE revenues (
     harvest_id   bigint,
     user_id      bigint NOT NULL,
     revenue_date date   NOT NULL,
-    amount       numeric(12,2) NOT NULL,
+    amount       montant NOT NULL,
     product      varchar(150),
-    quantity     numeric(12,2),
+    quantity     quantite,
     unit         varchar(20),
     client       varchar(150),
     comment      text,
@@ -580,8 +784,10 @@ COMMENT ON TABLE alerts IS 'Alertes : eau critique, stock critique, campagne à 
 -- -----------------------------------------------------------------------------
 --  3.18 activity_logs — Journal des opérations sensibles (CDC § 18)
 -- -----------------------------------------------------------------------------
+--       TABLE PARTITIONNÉE par mois (RANGE sur created_at) : journal d'audit,
+--       jamais modifié. La rétention se gère par partition (archivage, purge).
 CREATE TABLE activity_logs (
-    id          bigserial PRIMARY KEY,
+    id          bigserial NOT NULL,
     farm_id     bigint,
     user_id     bigint,
     action      varchar(100) NOT NULL,
@@ -592,10 +798,40 @@ CREATE TABLE activity_logs (
     user_agent  varchar(255),
     created_at  timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT activity_logs_farm_id_fkey FOREIGN KEY (farm_id) REFERENCES farms (id) ON DELETE SET NULL,
-    CONSTRAINT activity_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
-);
+    CONSTRAINT activity_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL,
+    CONSTRAINT activity_logs_pkey PRIMARY KEY (id, created_at)
+) PARTITION BY RANGE (created_at);
 
-COMMENT ON TABLE activity_logs IS 'Journal d''audit des accès et opérations sensibles (tentative de fuite inter-exploitation…).';
+COMMENT ON TABLE activity_logs IS 'Journal d''audit partitionné par mois (accès et opérations sensibles).';
+
+
+-- =============================================================================
+--  3.19 CRÉATION DES PARTITIONS MENSUELLES
+--
+--      Fenêtre initiale : de juillet 2026 (premier mouvement du jeu de
+--      démonstration) à mars 2027. Au-delà, la partition par défaut absorbe les
+--      écritures et un appel à agriwater_create_month_partition() les bascule.
+--
+--      Note — `irrigations` n'est volontairement PAS partitionnée : elle est
+--      référencée par water_movements.irrigation_id et par activities. Une clé
+--      étrangère ne peut pointer que vers une clé primaire/unique, or sur une
+--      table partitionnée PostgreSQL exige que cette clé contienne la clé de
+--      partition. Partitionner `irrigations` obligerait donc à dupliquer la
+--      date d'irrigation dans chaque ligne qui la référence, ou à supprimer
+--      l'intégrité référentielle. On lui applique à la place un index BRIN sur
+--      performed_at et des index composites couvrants (optimizations.sql), ce
+--      qui apporte l'essentiel du gain sans toucher au modèle.
+-- =============================================================================
+SELECT agriwater_prepare_partitions_from(DATE '2026-07-01', DATE '2027-03-01');
+
+-- Partitions de sécurité : absorbent toute écriture hors fenêtre
+CREATE TABLE water_movements_default PARTITION OF water_movements DEFAULT;
+CREATE TABLE activities_default      PARTITION OF activities      DEFAULT;
+CREATE TABLE activity_logs_default   PARTITION OF activity_logs   DEFAULT;
+
+COMMENT ON TABLE water_movements_default IS 'Filet de sécurité : mouvements hors des partitions mensuelles.';
+COMMENT ON TABLE activities_default      IS 'Filet de sécurité : activités hors des partitions mensuelles.';
+COMMENT ON TABLE activity_logs_default   IS 'Filet de sécurité : journal hors des partitions mensuelles.';
 
 
 -- =============================================================================
@@ -610,13 +846,13 @@ ALTER TABLE farms
 --  4. TABLES TECHNIQUES LARAVEL
 -- =============================================================================
 
-CREATE TABLE password_reset_tokens (
+CREATE TABLE public.password_reset_tokens (
     email      varchar(255) PRIMARY KEY,
     token      varchar(255) NOT NULL,
     created_at timestamptz  DEFAULT NULL
 );
 
-CREATE TABLE sessions (
+CREATE TABLE public.sessions (
     id            varchar(255) PRIMARY KEY,
     user_id       bigint,
     ip_address    varchar(45),
@@ -625,19 +861,19 @@ CREATE TABLE sessions (
     last_activity integer NOT NULL
 );
 
-CREATE TABLE cache (
+CREATE TABLE public.cache (
     key        varchar(255) PRIMARY KEY,
     value      text NOT NULL,
     expiration integer NOT NULL
 );
 
-CREATE TABLE cache_locks (
+CREATE TABLE public.cache_locks (
     key        varchar(255) PRIMARY KEY,
     owner      varchar(255) NOT NULL,
     expiration integer NOT NULL
 );
 
-CREATE TABLE jobs (
+CREATE TABLE public.jobs (
     id           bigserial PRIMARY KEY,
     queue        varchar(255) NOT NULL,
     payload      text NOT NULL,
@@ -647,7 +883,7 @@ CREATE TABLE jobs (
     created_at   integer NOT NULL
 );
 
-CREATE TABLE job_batches (
+CREATE TABLE public.job_batches (
     id            varchar(255) PRIMARY KEY,
     name          varchar(255) NOT NULL,
     total_jobs    integer NOT NULL,
@@ -660,7 +896,7 @@ CREATE TABLE job_batches (
     finished_at   integer
 );
 
-CREATE TABLE failed_jobs (
+CREATE TABLE public.failed_jobs (
     id         bigserial PRIMARY KEY,
     uuid       varchar(255) NOT NULL,
     connection text NOT NULL,
@@ -670,7 +906,7 @@ CREATE TABLE failed_jobs (
     failed_at  timestamptz DEFAULT now()
 );
 
-CREATE TABLE notifications (
+CREATE TABLE public.notifications (
     uuid            uuid PRIMARY KEY,
     type            varchar(255) NOT NULL,
     notifiable_type varchar(255) NOT NULL,
@@ -741,10 +977,10 @@ CREATE INDEX activity_logs_entity_index    ON activity_logs (entity_type, entity
 CREATE INDEX activity_logs_farm_date_index ON activity_logs (farm_id, created_at DESC);
 CREATE INDEX activity_logs_user_index      ON activity_logs (user_id);
 
-CREATE INDEX sessions_last_activity_index  ON sessions (last_activity);
-CREATE INDEX sessions_user_id_index        ON sessions (user_id);
-CREATE INDEX jobs_queue_index              ON jobs (queue);
-CREATE INDEX cache_expiration_index        ON cache (expiration);
+CREATE INDEX sessions_last_activity_index  ON public.sessions (last_activity);
+CREATE INDEX sessions_user_id_index        ON public.sessions (user_id);
+CREATE INDEX jobs_queue_index              ON public.jobs (queue);
+CREATE INDEX cache_expiration_index        ON public.cache (expiration);
 
 
 -- =============================================================================
@@ -771,7 +1007,8 @@ $$;
 -- 6.2 RM-01 / cohérence — le responsable appartient à sa propre exploitation
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_check_farm_manager() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 DECLARE
     v_farm_id bigint;
 BEGIN
@@ -805,7 +1042,8 @@ CREATE TRIGGER trg_farms_manager_check
 -- 6.3 RM-01 — la parcelle d'une campagne appartient à la même exploitation
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_check_campaign_plot() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 DECLARE
     v_farm_id bigint;
 BEGIN
@@ -832,7 +1070,8 @@ CREATE TRIGGER trg_campaigns_plot_check
 -- 6.4 RM-01 / RM-02 / RM-06 / RM-07 — cohérence d'une irrigation
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_check_irrigation_coherence() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 DECLARE
     c_campaign campaigns%ROWTYPE;
     c_plot     plots%ROWTYPE;
@@ -892,7 +1131,8 @@ CREATE TRIGGER trg_irrigations_coherence_check
 -- 6.5 RM-10 — validation obligatoire du responsable au-delà d'un seuil
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_check_manager_validation() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 DECLARE
     v_seuil numeric := agriwater_manager_validation_threshold();
 BEGIN
@@ -916,7 +1156,8 @@ CREATE TRIGGER trg_irrigations_manager_validation_check
 -- 6.6 RM-09 — toute variation du stock d'eau doit être tracée
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_assert_movement_trace() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 BEGIN
     IF NEW.available_quantity IS DISTINCT FROM OLD.available_quantity
        AND NOT EXISTS (
@@ -943,7 +1184,8 @@ CREATE CONSTRAINT TRIGGER trg_water_sources_movement_trace
 -- 6.7 RM-08 — alerte automatique au passage sous le seuil critique
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_alert_critical_water() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 BEGIN
     IF NEW.status = 'active'
        AND NEW.available_quantity <= NEW.critical_threshold
@@ -981,7 +1223,8 @@ CREATE CONSTRAINT TRIGGER trg_water_sources_critical_alert
 -- 6.8 RM-11 — une campagne terminée n'accepte plus d'opérations
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_check_campaign_not_closed() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 DECLARE
     c_campaign campaigns%ROWTYPE;
 BEGIN
@@ -1013,7 +1256,8 @@ CREATE TRIGGER trg_activities_closed_campaign_check
 -- 6.9 RM-13 — quantité vendue plafonnée par la quantité récoltée
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_check_revenue_vs_harvest() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 DECLARE
     h          harvests%ROWTYPE;
     v_deja     numeric := 0;
@@ -1060,7 +1304,8 @@ CREATE TRIGGER trg_revenues_harvest_check
 -- 6.10 Cohérence inter-exploitation des autres entités cloisonnées (RM-01)
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_check_same_farm() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 DECLARE
     v_table  text := TG_ARGV[0];
     v_column text := TG_ARGV[1];
@@ -1121,7 +1366,8 @@ CREATE TRIGGER trg_irrigation_schedules_farm_check
 -- 6.11 Journalisation automatique des accès et opérations sensibles
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION agriwater_log_operation() RETURNS trigger
-LANGUAGE plpgsql AS $$
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
 BEGIN
     IF TG_OP = 'UPDATE' AND OLD.status IS NOT DISTINCT FROM NEW.status
        AND TG_TABLE_NAME = 'irrigations' THEN
