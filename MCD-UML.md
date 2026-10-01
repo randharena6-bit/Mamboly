@@ -125,27 +125,51 @@ classDiagram
 
     Farm "1" --> "0..*" WaterSource : possede
     WaterSource "1" --> "0..*" WaterMovement : trace
+    Farm "1" --> "0..*" WaterMovement : cloisonne
+    Campaign "0..1" --> "0..*" WaterMovement : impute
+    User "1" --> "0..*" WaterMovement : enregistre
 
     Farm "1" --> "0..*" Irrigation : cloisonne
     Farm "1" --> "0..*" IrrigationSchedule : planifie
     Campaign "1" --> "0..*" Irrigation : concerne
     Plot "1" --> "0..*" Irrigation : irrigue
     WaterSource "1" --> "0..*" Irrigation : alimente
+    User "1" --> "0..*" Irrigation : realise
+    User "0..1" --> "0..*" Irrigation : valide
     Campaign "1" --> "0..*" IrrigationSchedule : planifiee
+    Plot "1" --> "0..*" IrrigationSchedule : ciblee
+    WaterSource "1" --> "0..*" IrrigationSchedule : prevue
+    User "1" --> "0..*" IrrigationSchedule : assigneeA
     Irrigation "0..1" --> "0..1" WaterMovement : genere
 
+    Farm "1" --> "0..*" Activity : cloisonne
     Plot "1" --> "0..*" Activity : porte
     Campaign "0..1" --> "0..*" Activity : concerne
+    User "1" --> "0..*" Activity : realise
     Farm "1" --> "0..*" Input : stocke
     Input "1" --> "0..*" StockMovement : trace
+    Farm "1" --> "0..*" StockMovement : cloisonne
+    Campaign "0..1" --> "0..*" StockMovement : impute
+    User "1" --> "0..*" StockMovement : enregistre
 
+    Farm "1" --> "0..*" Harvest : detient
     Campaign "1" --> "0..*" Harvest : produit
+    Plot "1" --> "0..*" Harvest : provient
+    User "1" --> "0..*" Harvest : realise
+    Farm "1" --> "0..*" Expense : cloisonne
     Campaign "0..1" --> "0..*" Expense : impute
+    User "1" --> "0..*" Expense : enregistre
+    Farm "1" --> "0..*" Revenue : cloisonne
     Campaign "0..1" --> "0..*" Revenue : impute
     Harvest "0..1" --> "0..*" Revenue : vend
+    User "1" --> "0..*" Revenue : enregistre
 
     Farm "1" --> "0..*" Alert : surveille
-    Farm "1" --> "0..*" ActivityLog : journalise
+    WaterSource "1" --> "0..*" Alert : declare
+    Input "0..1" --> "0..*" Alert : declare
+    Campaign "0..1" --> "0..*" Alert : concerne
+    Farm "0..1" --> "0..*" ActivityLog : journalise
+    User "0..1" --> "0..*" ActivityLog : auteur
 ```
 
 ### 2.1 Rôle de chaque classe
@@ -368,6 +392,7 @@ classDiagram
 
     Farm "1" --> "0..*" WaterSource : possede
     WaterSource "1" --> "0..*" WaterMovement : trace
+    Farm "1" --> "0..*" WaterMovement : cloisonne
     Campaign "0..1" --> "0..*" WaterMovement : impute
     User "1" --> "0..*" WaterMovement : enregistre
     Irrigation "0..1" --> "0..1" WaterMovement : genere
@@ -441,11 +466,13 @@ classDiagram
     WaterSource "1" --> "0..*" Irrigation : alimente
     User "1" --> "0..*" Irrigation : realise
     User "0..1" --> "0..*" Irrigation : valide
+    Farm "1" --> "0..*" Irrigation : cloisonne
 
     Campaign "1" --> "0..*" IrrigationSchedule : planifiee
     Plot "1" --> "0..*" IrrigationSchedule : ciblee
     WaterSource "1" --> "0..*" IrrigationSchedule : prevue
     User "1" --> "0..*" IrrigationSchedule : assigneeA
+    Farm "1" --> "0..*" IrrigationSchedule : cloisonne
 
     Irrigation "0..1" --> "0..1" WaterMovement : genere
 ```
@@ -550,6 +577,7 @@ classDiagram
 
     Farm "1" --> "0..*" Input : stocke
     Input "1" --> "0..*" StockMovement : trace
+    Farm "1" --> "0..*" StockMovement : cloisonne
     Campaign "0..1" --> "0..*" StockMovement : impute
     User "1" --> "0..*" StockMovement : enregistre
 ```
@@ -628,7 +656,9 @@ classDiagram
 
     Campaign "0..1" --> "0..*" Expense : impute
     User "1" --> "0..*" Expense : enregistre
+    Farm "1" --> "0..*" Expense : cloisonne
 
+    Farm "1" --> "0..*" Revenue : cloisonne
     Campaign "0..1" --> "0..*" Revenue : impute
     Harvest "0..1" --> "0..*" Revenue : vend
     User "1" --> "0..*" Revenue : enregistre
@@ -960,6 +990,19 @@ classDiagram
 | 38 | `Campaign` | 0..1 | `Alert` | concerne | `alerts.campaign_id` | oui |
 | 39 | `Farm` | 0..1 | `ActivityLog` | journalise | `activity_logs.farm_id` | oui |
 | 40 | `User` | 0..1 | `ActivityLog` | auteur | `activity_logs.user_id` | oui |
+| 41 | `Farm` | 1 | `WaterMovement` | cloisonne | `water_movements.farm_id` | non |
+| 42 | `Farm` | 1 | `Irrigation` | cloisonne | `irrigations.farm_id` | non |
+| 43 | `Farm` | 1 | `IrrigationSchedule` | cloisonne | `irrigation_schedules.farm_id` | non |
+| 44 | `Farm` | 1 | `Activity` | cloisonne | `activities.farm_id` | non |
+| 45 | `Farm` | 1 | `StockMovement` | cloisonne | `stock_movements.farm_id` | non |
+| 46 | `Farm` | 1 | `Expense` | cloisonne | `expenses.farm_id` | non |
+| 47 | `Farm` | 1 | `Revenue` | cloisonne | `revenues.farm_id` | non |
+| 48 | `User` | 1 | `Expense` | enregistre | `expenses.user_id` | non |
+| 49 | `User` | 1 | `Revenue` | enregistre | `revenues.user_id` | non |
+| 50 | `User` | 1 | `StockMovement` | enregistre | `stock_movements.user_id` | non |
+| 51 | `User` | 1 | `Harvest` | realise | `harvests.user_id` | non |
+
+> **Associations 41 à 51.** Ces clés étrangères n'apparaissent pas dans le CDC § 12 mais sont nécessaires à l'implémentation : les lignes 41 à 47 matérialisent le **cloisonnement SaaS** (règle RM-01) par une colonne dénormalisée `farm_id` sur chaque table enfantine, et les lignes 48 à 51 rattachent l'**utilisateur auteur** de chaque opération (traçabilité). Elles sont maintenues par le trait Laravel `BelongsToFarm` et par les triggers § 6.10 du schéma.
 
 ### 11.1 Politique d'intégrité référentielle
 
@@ -1282,10 +1325,11 @@ classDiagram
 
 | Contrôle | Résultat |
 |---|---|
-| Nombre de tables métier | 17 (le CDC recommande « environ 8 à 15 », § 12 ; 15 sont annoncées, 2 sont ajoutées pour la traçabilité exigée au § 18) |
-| Toutes les tables métier portent `farm_id` | ✔ (RM-01) |
+| Nombre de tables métier | 18 tables applicatives (17 entités métier + `activity_logs`), plus 8 tables techniques Laravel |
+| Toutes les tables métier portent `farm_id` | ✔ (RM-01) — 15 tables cloisonnées |
+| Nombre total d'associations | 51 clés étrangères, toutes décrites au § 11 |
 | Toutes les clés étrangères du § 12 du CDC sont présentes | ✔ `manager_id`, `plot_id`, `crop_id`, `water_source_id`, `campaign_id`, `irrigation_id`, `user_id`, `validated_by`, `performed_by`, `agent_id`, `input_id`, `harvest_id` |
-| Contrainte principale du CDC respectée | ✔ `WaterSource.available_quantity >= 0` garantie par transaction + verrouillage |
+| Contrainte principale du CDC respectée | ✔ `WaterSource.available_quantity >= 0` garantie par `CHECK`, transaction et verrouillage |
 | Boucle `Farm ↔ User` traitée | ✔ deux clés étrangères nullable |
-| Module personnel modélisé | ✔ score de priorité en attribut dérivé (non stocké) |
-| Regroupement des FK nullable | ✔ 13 associations en `"0..1"` sur 40 (colonnes § 11) |
+| Module personnel modélisé | ✔ score de priorité en attribut dérivé + vue `v_irrigation_priority` |
+| Regroupement des FK nullable | ✔ 13 associations en `"0..1"` sur 51 (colonnes § 11) |
