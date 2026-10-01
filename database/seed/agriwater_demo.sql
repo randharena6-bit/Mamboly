@@ -297,7 +297,7 @@ SELECT
     (SELECT u.id FROM users u
       WHERE u.farm_id = c.farm_id AND u.role_id = 3
       ORDER BY u.id LIMIT 1),
-    CURRENT_DATE + (row_number() OVER (ORDER BY c.id) - 3),
+    CURRENT_DATE + ((row_number() OVER (ORDER BY c.id))::int - 3),
     ('06:00'::time + ((row_number() OVER (ORDER BY c.id) % 4) || ' hours')::interval),
     400 + (c.id * 137) % 900,
     (ARRAY['faible','normale','elevee','critique'])[(c.id % 4) + 1]::priority_level,

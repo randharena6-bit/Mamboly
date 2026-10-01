@@ -1067,7 +1067,7 @@ DECLARE
     v_farm   bigint;
 BEGIN
     IF NEW.campaign_id IS NULL THEN
-        RETURN NULL;
+        RETURN NEW;
     END IF;
 
     EXECUTE format('SELECT farm_id FROM %I WHERE id = $1', v_table) INTO v_farm USING NEW.campaign_id;
@@ -1078,7 +1078,7 @@ BEGIN
             USING ERRCODE = 'check_violation';
     END IF;
 
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 
@@ -1135,7 +1135,7 @@ BEGIN
         lower(TG_OP),
         TG_TABLE_NAME,
         NEW.id,
-        format('%s sur %s (id=%)', TG_OP, TG_TABLE_NAME, NEW.id)
+        format('%s sur %s (id=%s)', TG_OP, TG_TABLE_NAME, NEW.id)
     );
     RETURN NULL;
 END;
