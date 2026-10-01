@@ -776,7 +776,7 @@ DECLARE
     v_farm_id bigint;
 BEGIN
     IF NEW.manager_id IS NULL THEN
-        RETURN NULL;
+        RETURN NEW;
     END IF;
 
     SELECT farm_id INTO v_farm_id FROM users WHERE id = NEW.manager_id;
@@ -793,7 +793,7 @@ BEGIN
             USING ERRCODE = 'check_violation';
     END IF;
 
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 
@@ -820,7 +820,7 @@ BEGIN
             NEW.plot_id, v_farm_id, NEW.farm_id
             USING ERRCODE = 'check_violation';
     END IF;
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 
@@ -880,7 +880,7 @@ BEGIN
             USING ERRCODE = 'check_violation';
     END IF;
 
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 
@@ -904,7 +904,7 @@ BEGIN
             NEW.quantity, NEW.unit, v_seuil
             USING ERRCODE = 'check_violation';
     END IF;
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 
@@ -992,7 +992,7 @@ BEGIN
             c_campaign.code, c_campaign.status, TG_TABLE_NAME, NEW.id
             USING ERRCODE = 'check_violation';
     END IF;
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 
@@ -1020,7 +1020,7 @@ DECLARE
     v_restant  numeric;
 BEGIN
     IF NEW.harvest_id IS NULL OR NEW.quantity IS NULL THEN
-        RETURN NULL;
+        RETURN NEW;
     END IF;
 
     SELECT * INTO h FROM harvests WHERE id = NEW.harvest_id;
@@ -1048,7 +1048,7 @@ BEGIN
             USING ERRCODE = 'check_violation';
     END IF;
 
-    RETURN NULL;
+    RETURN NEW;
 END;
 $$;
 

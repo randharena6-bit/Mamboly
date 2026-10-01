@@ -266,13 +266,6 @@ BEGIN
 END;
 $$;
 
--- Mouvements complémentaires : remplissage, ajout manuel, perte, ajustement
-INSERT INTO water_movements (farm_id, water_source_id, campaign_id, user_id, type, quantity, quantity_before, quantity_after, movement_date, note)
-VALUES
-    (1, 1, NULL, 2, 'remplissage',  1500, 0, 1500, now() - interval '15 days', 'Remplissage par pompe'),
-    (2, 4, NULL, 5, 'ajout_manuel',  800, 0,  800, now() - interval '10 days', 'Ajout manuel'),
-    (3, 7, NULL, 8, 'perte',         250, 0,  250, now() - interval '7 days',  'Fuite canal');
-
 -- Vidange volontaire qui fait passer une réserve sous son seuil critique (RM-08)
 DO $$
 DECLARE
@@ -362,7 +355,8 @@ SELECT
     'Activité de démonstration n°' || g.i,
     CASE WHEN g.i % 4 = 0 THEN 25000 + (g.i * 1300) % 60000 ELSE NULL END
 FROM generate_series(1, 30) g(i)
-JOIN LATERAL (SELECT * FROM campaigns WHERE status = 'active' ORDER BY id OFFSET ((g.i - 1) % 12) LIMIT 1) c ON true;
+JOIN LATERAL (SELECT * FROM campaigns WHERE status = 'active' ORDER BY id
+              OFFSET ((g.i - 1) % (SELECT count(*) FROM campaigns WHERE status = 'active')) LIMIT 1) c ON true;
 
 -- =============================================================================
 -- 12. RÉCOLTES
@@ -396,7 +390,8 @@ SELECT
     'Dépense de démonstration n°' || g.i,
     CASE WHEN g.i % 3 = 0 THEN 'receipts/demo-' || g.i || '.pdf' ELSE NULL END
 FROM generate_series(1, 20) g(i)
-JOIN LATERAL (SELECT * FROM campaigns WHERE status = 'active' ORDER BY id OFFSET ((g.i - 1) % 12) LIMIT 1) c ON true;
+JOIN LATERAL (SELECT * FROM campaigns WHERE status = 'active' ORDER BY id
+              OFFSET ((g.i - 1) % (SELECT count(*) FROM campaigns WHERE status = 'active')) LIMIT 1) c ON true;
 
 -- =============================================================================
 -- 14. RECETTES (15) — dont certaines liées à une récolte (RM-13)
@@ -407,7 +402,7 @@ SELECT
     LEAST(CURRENT_DATE, c.expected_end_date) - 1,
     round(h.quantity * (1200 + (g.i * 250) % 3000), 2),
     h.product,
-    round(h.quantity * 0.6, 2),          -- 60 % de la récolte vendue : respecte RM-13
+    round(h.quantity * 0.25, 2),         -- ≤ 25 % vendu par vente ; ≤ 2 ventes/récolte → RM-13
     h.unit,
     (ARRAY['Marché Analakely','Restaurant Chez Mariette','Grossiste Tana','Hôtel Colbert'])[(g.i % 4) + 1],
     'Vente de démonstration n°' || g.i
