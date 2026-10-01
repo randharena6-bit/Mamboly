@@ -13,6 +13,13 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (DB::getDriverName() !== 'pgsql') {
+            throw new RuntimeException(
+                'Le modèle AgriWater (ENUM natifs, déclencheurs, vues) requiert PostgreSQL. '
+                .'Installez pdo_pgsql puis basculez DB_CONNECTION=pgsql dans .env.'
+            );
+        }
+
         DB::unprepared(<<<'SQL'
         CREATE TYPE area_unit          AS ENUM ('m2', 'ha');
         CREATE TYPE water_unit         AS ENUM ('L', 'm3');

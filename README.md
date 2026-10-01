@@ -5,6 +5,7 @@ Application Laravel 12. Point de depart structure, francophone (locale `fr`), ti
 ## Pre-requis
 
 - PHP 8.2+ (extensions `pdo_sqlite`, `mbstring`, `openssl`, `curl`, `zip`)
+- Pour PostgreSQL : extension `pdo_pgsql` (`sudo apt install php8.4-pgsql`)
 - Composer 2
 - Node 20+ / npm
 
@@ -46,10 +47,60 @@ Vite doit tourner separement (`npm run dev`) pour que les assets se rechargent a
 
 ## Base de donnees
 
-Par defaut : SQLite (`database/database.sqlite`). Pour MySQL, decommenter et renseigner les variables `DB_*` dans `.env`, puis :
+Le modele metier AgriWater est concu pour **PostgreSQL** (types `ENUM` natifs, declencheurs de regles metier, vues de tableau de bord). SQLite ne peut pas l'executer tel quel.
+
+Trois couches de fichiers, du plus bas niveau au plus haut :
+
+| Fichier | Contenu |
+| --- | --- |
+| `database/schema.sql` | Schema complet (26 tables, 20 ENUM, 51 clés étrangères, 34 CHECK, 33 declencheurs, 14 fonctions, 7 vues) |
+| `database/optimizations.sql` | Pack d'optimisation « gold » : index, statistiques etendues, reglages de stockage, vue materialisee analytique |
+| `database/seed/agriwater_demo.sql` | Jeu de demonstration du CDC § 19 (3 exploitations, 40 irrigations, alertes…) |
+
+### Installation rapide (PostgreSQL via Docker)
 
 ```bash
-php artisan migrate:fresh --seed
+docker run -d --name agriwater-postgres --restart unless-stopped \
+  -e POSTGRES_USER=agriwater -e POSTGRES_PASSWORD=agriwater \
+  -e POSTGRES_DB=agriwater -p 5434:5432 postgres:16-alpine
+
+docker exec -i agriwater-postgres psql -U agriwater -d agriwater -v ON_ERROR_STOP=1 -f - < database/schema.sql
+docker exec -i agriwater-postgres psql -U agriwater -d agriwater -v ON_ERROR_STOP=1 -f - < database/seed/agriwater_demo.sql
+docker exec -i agriwater-postgres psql -U agriwater -d agriwater -v ON_ERROR_STOP=1 -f - < database/optimizations.sql
+```
+
+`schema.sql` d'abord (il reconstruit la base de zero), puis les donnees, puis le pack d'optimisation — de sorte que la vue materialisee est creee sur des donnees reelles et que `ANALYZE` calibre le planificateur sur le volume reel.
+
+Le script `schema.sql` commence par un `DROP SCHEMA public CASCADE` : il reconstruit la base de zero et se reapplique sans erreur.
+
+### Installation via les migrations Laravel
+
+Les migrations de `database/migrations/` reproduisent exactement le meme schema (meme ordre de creation, memes contraintes) et ajoutent le pack d'optimisation.
+
+```bash
+# extension PHP requise
+sudo apt install php8.4-pgsql
+
+# .env
+DB_CONNECTION=pgsql
+DB_HOST=127.0.0.1
+DB_PORT=5434
+DB_DATABASE=agriwater
+DB_USERNAME=agriwater
+DB_PASSWORD=agriwater
+
+php artisan migrate --seed      # AgriWaterDemoSeeder
+```
+
+Les fichiers de la base sont :
+
+```
+database/
+  schema.sql            schéma canonique (installateur autonome)
+  optimizations.sql     pack d'optimisation (appliqué par la migration 001000)
+  seed/agriwater_demo.sql  données de démonstration
+  migrations/           23 migrations Laravel (équivalent de schema.sql + optimisations)
+  seeders/AgriWaterDemoSeeder.php  charge database/seed/agriwater_demo.sql
 ```
 
 ## Tests et qualite

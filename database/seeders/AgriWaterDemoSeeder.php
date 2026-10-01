@@ -30,6 +30,25 @@ class AgriWaterDemoSeeder extends Seeder
 
         DB::unprepared(File::get($path));
 
+        $this->refreshAnalytics();
+
         $this->command?->info('Jeu de démonstration AgriWater chargé.');
+    }
+
+    /**
+     * Recalcule les vues matérialisées analytiques (pack d'optimisation),
+     * si celui-ci a été appliqué.
+     */
+    protected function refreshAnalytics(): void
+    {
+        if (DB::getDriverName() !== 'pgsql') {
+            return;
+        }
+
+        $fn = DB::selectOne("SELECT to_regprocedure('agriwater_refresh_analytics()') AS p");
+
+        if ($fn !== null && $fn->p !== null) {
+            DB::statement('SELECT agriwater_refresh_analytics()');
+        }
     }
 }
