@@ -28,19 +28,20 @@
 
 BEGIN;
 
--- Nettoyage total (idempotence)
+-- Nettoyage total (idempotence).
+-- agriwater d'abord : ses clés étrangères pointent vers public.
 DROP SCHEMA IF EXISTS agriwater CASCADE;
-DROP TABLE IF EXISTS public.password_reset_tokens, public.sessions, public.cache,
-                     public.cache_locks, public.jobs, public.job_batches,
-                     public.failed_jobs, public.notifications CASCADE;
+DROP SCHEMA public CASCADE;
+
+CREATE SCHEMA public;
+GRANT ALL ON SCHEMA public TO agriwater;
+GRANT ALL ON SCHEMA public TO public;
 
 CREATE SCHEMA agriwater AUTHORIZATION agriwater;
 COMMENT ON SCHEMA agriwater IS
     'Domaine métier AgriWater : exploitations, eau, campagnes, finance, journal d''audit.';
 
 GRANT ALL ON SCHEMA agriwater TO agriwater;
-GRANT ALL ON SCHEMA public   TO agriwater;
-GRANT ALL ON SCHEMA public   TO public;
 
 -- Toutes les écritures non qualifiées de ce fichier visent agriwater.
 SET search_path TO agriwater, public;
@@ -205,7 +206,6 @@ DECLARE
     v_name    text;
     v_lo      timestamptz := date_trunc('month', p_month)::timestamptz;
     v_hi      timestamptz := (date_trunc('month', p_month) + interval '1 month')::timestamptz;
-    v_stag    text;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'agriwater' AND c.relname = p_table AND c.relkind = 'p') THEN
@@ -224,15 +224,17 @@ BEGIN
             USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
+    -- ATTACH PARTITION conserve le nom de la table rattachée : on crée donc
+    -- directement la table sous son nom définitif, ce qui rend la détection
+    -- d/idempotence fiable.
     v_name := p_table || '_' || to_char(p_month, 'YYYY_MM');
     IF to_regclass('agriwater.' || quote_ident(v_name)) IS NOT NULL THEN
         RETURN v_name;                                  -- déjà en place
     END IF;
 
-    v_stag := p_table || '_staging_' || to_char(p_month, 'YYYY_MM');
-
     -- 1. table autonome, calque de la table partitionnée
-    EXECUTE format('CREATE TABLE agriwater.%I (LIKE agriwater.%I INCLUDING CONSTRAINTS)', v_stag, p_table);
+    --    INCLUDING CONSTRAINTS recopie les CHECK : ATTACH les exige.
+    EXECUTE format('CREATE TABLE agriwater.%I (LIKE agriwater.%I INCLUDING CONSTRAINTS)', v_name, p_table);
 
     -- 2. bascule des lignes éventuellement stockées dans la partition par défaut
     v_part := p_table || '_default';
@@ -241,14 +243,15 @@ BEGIN
             'WITH moved AS (
                  DELETE FROM agriwater.%I WHERE %I >= $1 AND %I < $2 RETURNING *
              ) INSERT INTO agriwater.%I SELECT * FROM moved',
-            v_part, v_key, v_key, v_stag)
+            v_part, v_key, v_key, v_name)
         USING v_lo, v_hi;
     END IF;
 
     -- 3. rattachement : PostgreSQL revalide le périmètre et propage les index
+    --    du parent à la nouvelle partition, automatiquement et définitivement.
     EXECUTE format(
         'ALTER TABLE agriwater.%I ATTACH PARTITION agriwater.%I FOR VALUES FROM (%L) TO (%L)',
-        p_table, v_stag, v_lo, v_hi);
+        p_table, v_name, v_lo, v_hi);
 
     RETURN v_name;
 END;
@@ -1387,6 +1390,139 @@ CREATE TRIGGER trg_water_sources_log
     FOR EACH ROW EXECUTE FUNCTION agriwater_log_operation();
 
 
+-- -----------------------------------------------------------------------------
+--  6.12 RM-12 — toute variation du stock d'intrant doit être tracée
+--      Symétrique de RM-09 appliqué à l'eau : le stock d'intrants ne peut pas
+--      être modifié sans mouvement correspondant dans stock_movements.
+--      Déclencheur différé : l'ordre des écritures dans la transaction est
+--      libre, la vérification a lieu au COMMIT.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_assert_stock_trace() RETURNS trigger
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+BEGIN
+    IF NEW.available_quantity IS DISTINCT FROM OLD.available_quantity
+       AND NOT EXISTS (
+            SELECT 1 FROM stock_movements sm
+            WHERE sm.input_id = NEW.id
+              AND sm.stock_before = OLD.available_quantity
+              AND sm.stock_after  = NEW.available_quantity
+       ) THEN
+        RAISE EXCEPTION
+            'RM-12 : variation du stock de « % » (% -> %) sans mouvement d''intrant traçable correspondant',
+            NEW.name, OLD.available_quantity, NEW.available_quantity
+            USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER trg_inputs_stock_trace
+    AFTER UPDATE OF available_quantity ON inputs
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION agriwater_assert_stock_trace();
+
+-- -----------------------------------------------------------------------------
+--  6.13 RM-08 appliqué aux intrants — alerte automatique au passage sous le
+--      seuil critique (franchissement du seuil, pas simple passage en dessous)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_alert_critical_input() RETURNS trigger
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+BEGIN
+    IF NEW.status = 'actif'
+       AND NEW.available_quantity <= NEW.minimum_threshold
+       AND OLD.available_quantity > OLD.minimum_threshold
+       AND NOT EXISTS (
+            SELECT 1 FROM alerts a
+            WHERE a.input_id = NEW.id
+              AND a.type = 'stock_critique'
+              AND a.is_read = false
+       ) THEN
+        INSERT INTO alerts (farm_id, input_id, type, severity, title, message)
+        VALUES (
+            NEW.farm_id,
+            NEW.id,
+            'stock_critique',
+            CASE WHEN NEW.available_quantity <= NEW.minimum_threshold / 2
+                 THEN 'critique'::alert_severity
+                 ELSE 'avertissement'::alert_severity END,
+            format('Stock critique : %s', NEW.name),
+            format('Le stock de « %s » est de %s %s pour un seuil minimal de %s %s. '
+                   || 'Passez une commande avant d''engager la prochaine campagne.',
+                   NEW.name, NEW.available_quantity, NEW.unit,
+                   NEW.minimum_threshold, NEW.unit)
+        );
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE CONSTRAINT TRIGGER trg_inputs_critical_alert
+    AFTER UPDATE OF available_quantity ON inputs
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION agriwater_alert_critical_input();
+
+-- -----------------------------------------------------------------------------
+--  6.14 Cohérence planning / réalisation (CDC § 6.8 / § 6.9)
+--      Passer une irrigation de statut « planifiee » à « realisee » clôture
+--      automatiquement la planification correspondante : le taux de réalisation
+--      (indicateur 4) reste donc toujours exact, sans travail manuel.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_sync_schedule_status() RETURNS trigger
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+DECLARE
+    n integer;
+BEGIN
+    UPDATE irrigation_schedules s
+       SET status      = 'realisee',
+           updated_at  = now()
+     WHERE s.campaign_id     = NEW.campaign_id
+       AND s.plot_id         = NEW.plot_id
+       AND s.water_source_id = NEW.water_source_id
+       AND s.scheduled_date  = (NEW.performed_at AT TIME ZONE 'UTC')::date
+       AND s.status          = 'planifiee';
+    GET DIAGNOSTICS n = ROW_COUNT;
+    IF n > 0 THEN
+        RAISE DEBUG 'Planification clôturée automatiquement (% ligne(s)) pour l''irrigation %', n, NEW.id;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER trg_irrigations_sync_schedule
+    AFTER UPDATE OF status ON irrigations
+    FOR EACH ROW WHEN (NEW.status = 'realisee' AND OLD.status IS DISTINCT FROM NEW.status)
+    EXECUTE FUNCTION agriwater_sync_schedule_status();
+
+-- -----------------------------------------------------------------------------
+--  6.15 Libération d'une parcelle à la clôture de sa campagne
+--      Une campagne terminée ou annulée ne doit pas laisser sa parcelle
+--      verrouillée en « en_culture » : elle redevient disponible.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_release_plot_on_close() RETURNS trigger
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+BEGIN
+    IF NEW.status IN ('terminee', 'annulee')
+       AND OLD.status IS DISTINCT FROM NEW.status THEN
+        UPDATE plots p
+           SET status     = 'en_repos',
+               updated_at = now()
+         WHERE p.id = NEW.plot_id
+           AND p.status = 'en_culture';
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+CREATE TRIGGER trg_campaigns_release_plot
+    AFTER UPDATE OF status ON campaigns
+    FOR EACH ROW WHEN (NEW.status IN ('terminee', 'annulee'))
+    EXECUTE FUNCTION agriwater_release_plot_on_close();
+
+
 -- =============================================================================
 --  7. VUES DU TABLEAU DE BORD ET INDICATEURS
 -- =============================================================================
@@ -1518,11 +1654,13 @@ CREATE OR REPLACE VIEW v_irrigation_priority AS
 SELECT
     p.id                AS plot_id,
     p.farm_id,
+    c.id                AS campaign_id,
     p.code              AS plot_code,
     p.name              AS plot_name,
     p.status            AS plot_status,
     p.manual_priority,
     p.soil_moisture,
+    agriwater_to_m2(p.area, p.area_unit) AS area_m2,
     cr.id               AS crop_id,
     cr.name             AS crop_name,
     cr.water_requirement,
@@ -1552,7 +1690,7 @@ SELECT
              + CASE WHEN p.soil_moisture IS NULL THEN 0
                     ELSE GREATEST(0, 30 - p.soil_moisture) END >= 20 THEN 'normale'
         ELSE 'faible'
-    END                 AS proposed_priority
+    END::priority_level AS proposed_priority
 FROM plots p
 JOIN campaigns c  ON c.plot_id = p.id AND c.farm_id = p.farm_id AND c.status = 'active'
 JOIN crops     cr ON cr.id = c.crop_id
@@ -1607,5 +1745,898 @@ JOIN water_sources ws  ON ws.id = i.water_source_id
 JOIN users         per ON per.id = i.performed_by
 LEFT JOIN users    val ON val.id = i.validated_by
 LEFT JOIN water_movements wm ON wm.irrigation_id = i.id;
+
+
+-- -----------------------------------------------------------------------------
+--  7.8 Alertes actionnables — l'écran d'accueil de l'application
+--      Classe par gravité puis ancienneté, et rattache l'objet concerné pour
+--      éviter qu'un N+1 soit nécessaire côté API.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_alerts_recent AS
+SELECT
+    a.id,
+    a.farm_id,
+    f.name                                       AS farm_name,
+    a.type,
+    a.severity,
+    (CASE a.severity WHEN 'critique' THEN 3 WHEN 'avertissement' THEN 2 ELSE 1 END)
+                                                AS severity_rank,
+    a.title,
+    a.message,
+    a.created_at,
+    CURRENT_DATE - a.created_at::date             AS age_days,
+    COALESCE(ws.name, i.name, c.code)              AS target_name,
+    COALESCE(ws.id, i.id, c.id)                   AS target_id,
+    CASE a.type
+        WHEN 'eau_critique'     THEN concat('/sources/', ws.id)
+        WHEN 'stock_critique'   THEN concat('/intrants/', i.id)
+        WHEN 'campagne_a_risque' THEN concat('/campagnes/', c.id)
+        ELSE '/'
+    END                                           AS action_url
+FROM alerts a
+JOIN farms f ON f.id = a.farm_id
+LEFT JOIN water_sources ws ON ws.id = a.water_source_id
+LEFT JOIN inputs         i  ON i.id  = a.input_id
+LEFT JOIN campaigns      c  ON c.id  = a.campaign_id
+WHERE a.is_read = false;
+
+-- -----------------------------------------------------------------------------
+--  7.9 État consolidé d'une parcelle : campagne en cours, consommation,
+--      score de priorité et último arrosage. Une seule requête pour l'écran
+--      « mes parcelles ».
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_plot_status AS
+SELECT
+    p.id                AS plot_id,
+    p.farm_id,
+    f.name              AS farm_name,
+    p.code              AS plot_code,
+    p.name              AS plot_name,
+    p.status            AS plot_status,
+    p.manual_priority,
+    p.soil_moisture,
+    agriwater_to_m2(p.area, p.area_unit)                          AS area_m2,
+    c.id                AS campaign_id,
+    c.code              AS campaign_code,
+    c.name              AS campaign_name,
+    c.status            AS campaign_status,
+    cr.name             AS crop_name,
+    c.expected_end_date,
+    (c.expected_end_date < CURRENT_DATE)                          AS is_overdue,
+    pr.priority_score,
+    pr.proposed_priority,
+    COALESCE(wc.water_used, 0)                                   AS water_used,
+    wc.last_irrigation_at,
+    (CURRENT_DATE - wc.last_irrigation_at::date)                  AS days_since_irrigation,
+    (SELECT count(*) FROM irrigation_schedules s
+      WHERE s.plot_id = p.id
+        AND s.status = 'planifiee'
+        AND s.scheduled_date >= CURRENT_DATE)                    AS upcoming_irrigations
+FROM plots p
+JOIN farms f ON f.id = p.farm_id
+LEFT JOIN campaigns c  ON c.plot_id = p.id AND c.status IN ('active', 'planifiee')
+LEFT JOIN crops     cr ON cr.id = c.crop_id
+LEFT JOIN v_irrigation_priority pr ON pr.plot_id = p.id
+LEFT JOIN LATERAL (
+    SELECT sum(i.quantity) AS water_used,
+           max(i.performed_at) AS last_irrigation_at
+      FROM irrigations i
+     WHERE i.plot_id = p.id AND i.status IN ('validee', 'realisee')
+) wc ON true;
+
+-- -----------------------------------------------------------------------------
+--  7.10 Planning opérationnel — le travail du jour et des jours suivants
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_planning_today AS
+SELECT
+    s.scheduled_date,
+    s.id            AS schedule_id,
+    s.farm_id,
+    f.name          AS farm_name,
+    p.code          AS plot_code,
+    p.name          AS plot_name,
+    c.code          AS campaign_code,
+    cr.name         AS crop_name,
+    ws.name         AS water_source_name,
+    u.name          AS agent_name,
+    s.agent_id,
+    s.estimated_quantity,
+    s.priority,
+    s.status,
+    s.comment,
+    (SELECT count(*) FROM irrigations i
+      WHERE i.plot_id = s.plot_id
+        AND i.water_source_id = s.water_source_id
+        AND i.performed_at::date = s.scheduled_date
+        AND i.status IN ('validee', 'realisee'))                 AS already_done
+FROM irrigation_schedules s
+JOIN farms         f  ON f.id  = s.farm_id
+JOIN plots         p  ON p.id  = s.plot_id
+JOIN campaigns     c  ON c.id  = s.campaign_id
+LEFT JOIN crops     cr ON cr.id = c.crop_id
+JOIN water_sources ws ON ws.id = s.water_source_id
+JOIN users         u  ON u.id  = s.agent_id
+WHERE s.status IN ('planifiee', 'reportee');
+
+-- -----------------------------------------------------------------------------
+--  7.11 Synthèse stock d'intrants en temps réel
+--      (la vue matérialisée mv_input_stock sert le calcul de couverture en
+--       masse ; cette vue est la version temps réel pour une fiche intrant)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_input_stock_status AS
+SELECT
+    i.id                AS input_id,
+    i.farm_id,
+    f.name              AS farm_name,
+    i.name,
+    i.category,
+    i.unit,
+    i.available_quantity,
+    i.minimum_threshold,
+    round(i.available_quantity * i.unit_price, 2)                 AS stock_value,
+    (i.available_quantity <= i.minimum_threshold)                 AS is_critical,
+    (i.available_quantity = 0)                                    AS is_out_of_stock,
+    (SELECT max(sm.movement_date) FROM stock_movements sm WHERE sm.input_id = i.id)
+                                                                   AS last_movement_at,
+    (SELECT sum(sm.quantity) FROM stock_movements sm
+      WHERE sm.input_id = i.id AND sm.type IN ('sortie', 'consommation')
+        AND sm.movement_date >= now() - interval '30 days')       AS consumed_30d,
+    (SELECT count(*) FROM alerts a
+      WHERE a.input_id = i.id AND a.type = 'stock_critique' AND a.is_read = false)
+                                                                   AS open_alerts
+FROM inputs i
+JOIN farms f ON f.id = i.farm_id;
+
+-- -----------------------------------------------------------------------------
+--  7.12 Prévision d'eau par ressource (indicateur 3, version agrégée)
+--      Horizon 7 jours : réserve disponible, consommation moyenne, besoins
+--      planifiés et date de rupture estimée.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE VIEW v_water_forecast AS
+SELECT
+    ws.id                  AS water_source_id,
+    ws.farm_id,
+    f.name                 AS farm_name,
+    ws.name                AS water_source_name,
+    ws.unit,
+    ws.available_quantity,
+    ws.critical_threshold,
+    GREATEST(ws.available_quantity - ws.critical_threshold, 0)       AS usable_quantity,
+    COALESCE(cons.daily_need, 0)                                  AS daily_need,
+    COALESCE(pl7.planned_7d, 0)                                   AS planned_7d,
+    round(COALESCE(cons.daily_need, 0) * 7 + COALESCE(pl7.planned_7d, 0), 2)
+                                                                    AS need_7d,
+    CASE WHEN COALESCE(cons.daily_need, 0) > 0
+         THEN round(GREATEST(ws.available_quantity - ws.critical_threshold, 0)
+                    / COALESCE(cons.daily_need, 0), 1)
+    END                                                           AS autonomy_days,
+    -- Date estimée de rupture : à quel jour la réserve utile est consommée
+    -- si l'on suit à la fois la consommation moyenne et le planning en cours.
+    CASE
+        WHEN COALESCE(cons.daily_need, 0) * 7 + COALESCE(pl7.planned_7d, 0) = 0
+            THEN NULL
+        WHEN GREATEST(ws.available_quantity - ws.critical_threshold, 0)
+             >= COALESCE(cons.daily_need, 0) * 7 + COALESCE(pl7.planned_7d, 0)
+            THEN NULL
+        ELSE CURRENT_DATE + ceil(
+                GREATEST(ws.available_quantity - ws.critical_threshold, 0)
+                / ((COALESCE(cons.daily_need, 0) * 7 + COALESCE(pl7.planned_7d, 0)) / 7.0)
+             )::int
+    END                                                           AS projected_shortfall_date
+FROM water_sources ws
+JOIN farms f ON f.id = ws.farm_id
+LEFT JOIN LATERAL (
+    SELECT sum(i.quantity) / 30.0 AS daily_need
+      FROM irrigations i
+     WHERE i.water_source_id = ws.id
+       AND i.status IN ('validee', 'realisee')
+       AND i.performed_at >= now() - interval '30 days'
+) cons ON true
+LEFT JOIN LATERAL (
+    SELECT sum(s.estimated_quantity) AS planned_7d
+      FROM irrigation_schedules s
+     WHERE s.water_source_id = ws.id
+       AND s.status IN ('planifiee', 'reportee')
+       AND s.scheduled_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 7
+) pl7 ON true
+WHERE ws.status = 'active';
+
+
+-- =============================================================================
+--  8. LOGIQUE MÉTIER AVANCÉE — PROCÉDURES, PRÉVISIONNELS ET CONTRÔLES
+--
+--     Tout ce qui demande plusieurs écritures coordonnées, un calcul ou un
+--     raisonnement métier est exécuté par la base, pas par l'application.
+--     Gain : la règle s'applique à l'API, au back-office, aux imports CSV, aux
+--     scripts de reprise — sans dupliquer le code, et elle ne peut pas être
+--     contournée en écrivant directement dans les tables.
+-- =============================================================================
+
+-- -----------------------------------------------------------------------------
+--  8.1 Conversion d'unité — l'eau est stockée en litres, mais peut être
+--      saisie en m³ (un réservoir se remplit rarely par litres)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_to_litres(q numeric, u water_unit) RETURNS numeric
+LANGUAGE sql IMMUTABLE
+    SET search_path = agriwater, public AS $$
+    SELECT CASE u WHEN 'm3' THEN q * 1000 ELSE q END;
+$$;
+
+CREATE OR REPLACE FUNCTION agriwater_from_litres(q numeric, u water_unit) RETURNS numeric
+LANGUAGE sql IMMUTABLE
+    SET search_path = agriwater, public AS $$
+    SELECT CASE u WHEN 'm3' THEN q / 1000 ELSE q END;
+$$;
+
+COMMENT ON FUNCTION agriwater_to_litres(numeric, water_unit)   IS 'Normalise une quantité d''eau en litres.';
+COMMENT ON FUNCTION agriwater_from_litres(numeric, water_unit) IS 'Convertit des litres dans l''unité de la ressource.';
+
+-- -----------------------------------------------------------------------------
+--  8.2 Enregistrer une irrigation — transaction métier complète (CDC § 8.1)
+--
+--      Regroupe dans UN SEUL appel les six écritures qu'une irrigation exige :
+--        1. verrouillage de la ressource et lecture du stock (FOR UPDATE)
+--        2. création de l'irrigation (déclenche les contrôles RM-01/02/03/06/07/10)
+--        3. écriture du mouvement d'eau (RM-09)
+--        4. décrément du stock
+--        5. activité technique « irrigation » pour l'historique de la parcelle
+--        6. journal d'audit rattaché à l'agent connecté
+--
+--      Si une seule des écritures échoue, tout est annulé : il est impossible
+--      de consommer de l'eau sans trace, ni d'enregistrer une irrigation sans
+--      avoir décrémenté le stock.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE agriwater_register_irrigation(
+    p_farm_id         bigint,
+    p_campaign_id     bigint,
+    p_plot_id         bigint,
+    p_water_source_id bigint,
+    p_user_id         bigint,
+    p_quantity        numeric,
+    p_method          irrigation_method,
+    p_unit            water_unit           DEFAULT 'L',
+    p_validated_by    bigint               DEFAULT NULL,
+    p_duration_minutes integer             DEFAULT NULL,
+    p_performed_at    timestamptz          DEFAULT now(),
+    p_observation     text                 DEFAULT NULL
+)
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+DECLARE
+    v_source       water_sources%ROWTYPE;
+    v_irrigation   bigint;
+    v_need_litres  numeric;
+    v_delta        numeric;
+    v_before       numeric;
+    v_after        numeric;
+BEGIN
+    -- 0. identité applicative : l'audit des écritures suivantes portera cet agent
+    PERFORM set_config('agriwater.user_id', p_user_id::text, true);
+
+    -- 1. verrou pessimiste sur la ressource : deux agents ne peuvent pas
+    --    consommer le même stock en parallèle
+    SELECT * INTO v_source
+      FROM water_sources
+     WHERE id = p_water_source_id
+       FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Ressource en eau % introuvable', p_water_source_id
+            USING ERRCODE = 'foreign_key_violation';
+    END IF;
+
+    v_need_litres := agriwater_to_litres(p_quantity, p_unit);
+    v_delta       := agriwater_from_litres(v_need_litres, v_source.unit);
+    v_before      := v_source.available_quantity;
+    v_after       := v_before - v_delta;
+
+    -- 2. l'irrigation (les triggers RM-01/02/03/06/07/10 s'exécutent ici)
+    INSERT INTO irrigations (
+        farm_id, campaign_id, plot_id, water_source_id, performed_by, validated_by,
+        performed_at, quantity, unit, duration_minutes, method, status, observation)
+    VALUES (
+        p_farm_id, p_campaign_id, p_plot_id, p_water_source_id, p_user_id, p_validated_by,
+        p_performed_at, p_quantity, p_unit, p_duration_minutes, p_method, 'realisee', p_observation)
+    RETURNING id INTO v_irrigation;
+
+    -- 3. contrôle du solde avant d'écrire (RM-04)
+    IF v_after < 0 THEN
+        RAISE EXCEPTION
+            'RM-04 : consommation impossible — « % » ne dispose que de % % et l''irrigation demande % %',
+            v_source.name, v_before, v_source.unit, p_quantity, p_unit
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    -- 4. mouvement d'eau traçable (RM-09)
+    INSERT INTO water_movements (
+        farm_id, water_source_id, campaign_id, irrigation_id, user_id,
+        type, quantity, quantity_before, quantity_after, movement_date, note)
+    VALUES (
+        p_farm_id, p_water_source_id, p_campaign_id, v_irrigation, p_user_id,
+        'consommation', v_delta, v_before, v_after, p_performed_at,
+        format('Consommation irrigation #%s', v_irrigation));
+
+    -- 5. décrément du stock
+    UPDATE water_sources
+       SET available_quantity = v_after
+     WHERE id = p_water_source_id;
+
+    -- 6. activité technique : la parcelle garde la trace de son arrosage
+    INSERT INTO activities (farm_id, campaign_id, plot_id, user_id, type, activity_date, description)
+    VALUES (p_farm_id, p_campaign_id, p_plot_id, p_user_id, 'irrigation',
+            (p_performed_at AT TIME ZONE 'UTC')::date,
+            format('Irrigation de %s %s (méthode : %s)', p_quantity, p_unit, p_method));
+
+    RAISE NOTICE 'Irrigation #% enregistrée : % % sur « % » — nouveau stock % %',
+                 v_irrigation, p_quantity, p_unit, v_source.name, v_after, v_source.unit;
+END;
+$$;
+
+COMMENT ON PROCEDURE agriwater_register_irrigation(bigint, bigint, bigint, bigint, bigint,
+    numeric, irrigation_method, water_unit, bigint, integer, timestamptz, text) IS
+    'Enregistre une irrigation et ses six écritures associées dans une transaction unique (CDC § 8.1).';
+
+-- -----------------------------------------------------------------------------
+--  8.3 Planification automatique à partir du score de priorité (§ 6.10)
+--
+--      Parcourt les parcelles par score décroissant et crée une planification
+--      pour demain tant que : la priorité est au moins « elevee », qu'aucune
+--      irrigation n'est déjà planifiée sur l'horizon, et qu'une ressource de
+--      l'exploitation dispose d'une réserve utilisable suffisante. L'agent
+--      retenu est celui qui a le moins de tâches ce jour-là.
+--
+--      Retourne les planifications créées.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_plan_irrigations(
+    p_farm_id        bigint         DEFAULT NULL,
+    p_horizon_days   integer        DEFAULT 7,
+    p_min_priority   priority_level DEFAULT 'elevee',
+    p_agent_id       bigint         DEFAULT NULL
+)
+RETURNS TABLE (
+    schedule_id       bigint,
+    farm_name         varchar,
+    plot_code         varchar,
+    scheduled_date    date,
+    estimated_quantity numeric,
+    water_source_name varchar,
+    agent_name        varchar,
+    priority          priority_level
+)
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+DECLARE
+    r          record;
+    v_qty      numeric;
+    v_source   bigint;
+    v_agent    bigint;
+    v_campaign bigint;
+    v_sched_id bigint;
+    v_date     date := CURRENT_DATE + 1;
+    v_wanted   integer;
+BEGIN
+    v_wanted := agriwater_priority_weight(p_min_priority);
+
+    FOR r IN
+        SELECT pr.plot_id, pr.farm_id, pr.campaign_id, pr.proposed_priority,
+               pr.water_requirement, pr.area_m2, pr.priority_score
+          FROM v_irrigation_priority pr
+         WHERE (p_farm_id IS NULL OR pr.farm_id = p_farm_id)
+           AND agriwater_priority_weight(pr.proposed_priority) >= v_wanted
+           AND NOT EXISTS (
+                SELECT 1 FROM irrigation_schedules s
+                 WHERE s.plot_id = pr.plot_id
+                   AND s.status IN ('planifiee', 'reportee')
+                   AND s.scheduled_date BETWEEN CURRENT_DATE AND CURRENT_DATE + p_horizon_days)
+         ORDER BY pr.priority_score DESC
+    LOOP
+        -- Besoin en eau de la culture (L/m²) × surface (m²) : même formule que
+        -- le module de priorité, pour que la planification reste cohérente
+        -- avec ce que l'agent voit à l'écran.
+        v_qty := round(GREATEST(r.water_requirement, 0) * r.area_m2, 2);
+        CONTINUE WHEN v_qty IS NULL OR v_qty <= 0;
+
+        -- Ressource la mieux approvisionnée au-dessus de son seuil critique
+        SELECT ws.id INTO v_source
+          FROM water_sources ws
+         WHERE ws.farm_id = r.farm_id
+           AND ws.status = 'active'
+           AND (ws.available_quantity - ws.critical_threshold) >= v_qty
+         ORDER BY (ws.available_quantity - ws.critical_threshold) DESC
+         LIMIT 1;
+        CONTINUE WHEN v_source IS NULL;      -- réserve insuffisante : on n'engage rien
+
+        -- Agent le moins chargé sur la date cible
+        v_agent := COALESCE(p_agent_id, (
+            SELECT u.id
+              FROM users u
+              JOIN roles ro ON ro.id = u.role_id
+             WHERE u.farm_id = r.farm_id
+               AND u.is_active
+               AND ro.name = 'agent'
+             ORDER BY (SELECT count(*) FROM irrigation_schedules s2
+                        WHERE s2.agent_id = u.id
+                          AND s2.scheduled_date = v_date
+                          AND s2.status IN ('planifiee', 'reportee')) ASC,
+                      u.id
+             LIMIT 1));
+        CONTINUE WHEN v_agent IS NULL;
+
+        INSERT INTO irrigation_schedules (
+            farm_id, campaign_id, plot_id, water_source_id, agent_id,
+            scheduled_date, estimated_quantity, priority, status, comment)
+        VALUES (
+            r.farm_id, r.campaign_id, r.plot_id, v_source, v_agent,
+            v_date, v_qty, r.proposed_priority, 'planifiee',
+            format('Planification automatique — score de priorité %s', r.priority_score))
+        RETURNING id INTO v_sched_id;
+
+        schedule_id        := v_sched_id;
+        farm_name          := (SELECT f.name FROM farms f WHERE f.id = r.farm_id);
+        plot_code          := (SELECT p.code FROM plots p WHERE p.id = r.plot_id);
+        scheduled_date     := v_date;
+        estimated_quantity := v_qty;
+        water_source_name  := (SELECT ws.name FROM water_sources ws WHERE ws.id = v_source);
+        agent_name         := (SELECT u.name FROM users u WHERE u.id = v_agent);
+        priority           := r.proposed_priority;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$;
+
+COMMENT ON FUNCTION agriwater_plan_irrigations(bigint, integer, priority_level, bigint) IS
+    'Planifie automatiquement les irrigations prioritaires du lendemain, sous réserve de réserve en eau suffisante.';
+
+-- -----------------------------------------------------------------------------
+--  8.4 Prévisionnel de réserve (indicateur 3, projeté sur l'horizon)
+--      Combine la consommation moyenne des 30 derniers jours et les besoins
+--      déjà planifiés pour projeter le niveau jour par jour, et signale le
+--      premier jour de rupture.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_reserve_forecast(p_water_source_id bigint, p_days integer DEFAULT 30)
+RETURNS TABLE (
+    day                 date,
+    available_quantity  numeric,
+    daily_need          numeric,
+    planned_demand      numeric,
+    projected_quantity  numeric,
+    below_threshold     boolean
+)
+LANGUAGE sql STABLE
+    SET search_path = agriwater, public AS $$
+    WITH ws AS (
+        SELECT w.id, w.available_quantity, w.critical_threshold
+          FROM water_sources w
+         WHERE w.id = p_water_source_id AND w.status = 'active'
+    ),
+    days AS (
+        SELECT generate_series(CURRENT_DATE, CURRENT_DATE + p_days, interval '1 day')::date AS day
+    ),
+    base AS (
+        SELECT COALESCE((
+                   SELECT sum(i.quantity) / 30.0
+                     FROM irrigations i
+                    WHERE i.water_source_id = p_water_source_id
+                      AND i.status IN ('validee', 'realisee')
+                      AND i.performed_at >= now() - interval '30 days'
+               ), 0) AS daily_need
+    ),
+    planned AS (
+        SELECT s.scheduled_date AS day, sum(s.estimated_quantity) AS demand
+          FROM irrigation_schedules s
+          JOIN water_sources w ON w.id = s.water_source_id
+         WHERE s.water_source_id = p_water_source_id
+           AND s.status IN ('planifiee', 'reportee')
+           AND s.scheduled_date BETWEEN CURRENT_DATE AND CURRENT_DATE + p_days
+         GROUP BY 1
+    ),
+    proj AS (
+        SELECT d.day,
+               b.daily_need,
+               COALESCE(pl.demand, 0) AS planned_demand,
+               w.available_quantity - b.daily_need
+                   - COALESCE(sum(COALESCE(pl.demand, 0)) OVER (
+                       ORDER BY d.day ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0)
+                   AS projected
+          FROM days d
+          CROSS JOIN base b
+          CROSS JOIN ws  w
+          LEFT JOIN planned pl ON pl.day = d.day
+    )
+    SELECT pj.day,
+           ws.available_quantity,
+           round(pj.daily_need, 2)                 AS daily_need,
+           pj.planned_demand,
+           round(GREATEST(pj.projected, 0), 2)      AS projected_quantity,
+           (GREATEST(pj.projected, 0) < ws.critical_threshold) AS below_threshold
+      FROM proj pj CROSS JOIN ws
+     ORDER BY pj.day;
+$$;
+
+COMMENT ON FUNCTION agriwater_reserve_forecast(bigint, integer) IS
+    'Projection jour par jour du niveau d''une réserve : consommation moyenne + planifications en cours.';
+
+-- -----------------------------------------------------------------------------
+--  8.5 Marge d'une campagne, coût de l'eau inclus (CDC § 9.3)
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_campaign_margin(p_campaign_id bigint)
+RETURNS TABLE (
+    campaign_code   varchar,
+    total_expenses  numeric,
+    total_revenues  numeric,
+    gross_margin    numeric,
+    margin_rate_pct numeric,
+    water_used      numeric,
+    harvested       numeric
+)
+LANGUAGE sql STABLE
+    SET search_path = agriwater, public AS $$
+    SELECT c.code,
+           COALESCE((SELECT sum(e.amount) FROM expenses e WHERE e.campaign_id = c.id), 0),
+           COALESCE((SELECT sum(r.amount) FROM revenues r WHERE r.campaign_id = c.id), 0),
+           COALESCE((SELECT sum(r.amount) FROM revenues r WHERE r.campaign_id = c.id), 0)
+             - COALESCE((SELECT sum(e.amount) FROM expenses e WHERE e.campaign_id = c.id), 0)
+             - COALESCE((SELECT sum(ac.cost) FROM activities ac WHERE ac.campaign_id = c.id), 0),
+           round(
+               CASE WHEN COALESCE((SELECT sum(r.amount) FROM revenues r WHERE r.campaign_id = c.id), 0) > 0
+                    THEN 100.0 * (
+                        COALESCE((SELECT sum(r.amount) FROM revenues r WHERE r.campaign_id = c.id), 0)
+                        - COALESCE((SELECT sum(e.amount) FROM expenses e WHERE e.campaign_id = c.id), 0)
+                        - COALESCE((SELECT sum(ac.cost) FROM activities ac WHERE ac.campaign_id = c.id), 0)
+                    ) / (SELECT sum(r.amount) FROM revenues r WHERE r.campaign_id = c.id)
+               END, 2),
+           COALESCE((SELECT sum(i.quantity) FROM irrigations i
+                      WHERE i.campaign_id = c.id AND i.status IN ('validee', 'realisee')), 0),
+           COALESCE((SELECT sum(h.quantity) FROM harvests h WHERE h.campaign_id = c.id), 0)
+      FROM campaigns c
+     WHERE c.id = p_campaign_id;
+$$;
+
+COMMENT ON FUNCTION agriwater_campaign_margin(bigint) IS
+    'Marge brute, taux de marge, eau consommée et récolte d''une campagne (coûts d''activité inclus).';
+
+-- -----------------------------------------------------------------------------
+--  8.6 Clôture de campagne : statut, date réelle et libération de la parcelle
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE PROCEDURE agriwater_close_campaign(p_campaign_id bigint, p_actual_end_date date DEFAULT CURRENT_DATE)
+LANGUAGE plpgsql
+    SET search_path = agriwater, public AS $$
+DECLARE
+    v_code varchar;
+BEGIN
+    UPDATE campaigns
+       SET status          = 'terminee',
+           actual_end_date = COALESCE(actual_end_date, p_actual_end_date),
+           updated_at      = now()
+     WHERE id = p_campaign_id
+       AND status NOT IN ('terminee', 'annulee')
+    RETURNING code INTO v_code;
+
+    IF v_code IS NULL THEN
+        RAISE NOTICE 'Campagne % déjà close ou inexistante — aucune action', p_campaign_id;
+        RETURN;
+    END IF;
+
+    RAISE NOTICE 'Campagne % close au % (parcelle libérée par trg_campaigns_release_plot)',
+                 v_code, p_actual_end_date;
+END;
+$$;
+
+-- -----------------------------------------------------------------------------
+--  8.7 Contrôle d'audit des ressources en eau
+--      Renvoie les anomalies constatables sur le journal : c'est le « audit
+--      » que l'on ne peut pas faire depuis l'application une fois l'écriture
+--      terminée (et que la base est la seule à pouvoir certifier).
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_water_audit()
+RETURNS TABLE (
+    anomaly           text,
+    water_source_id   bigint,
+    water_source_name varchar,
+    detail            text
+)
+LANGUAGE sql STABLE
+    SET search_path = agriwater, public AS $$
+    -- 1. le stock affiché ne correspond pas au dernier mouvement tracé
+    SELECT 'stock_non_reconcilie', w.id, w.name,
+           format('stock = % % alors que le dernier mouvement donne % %',
+                  w.available_quantity, w.unit, lm.quantity_after, w.unit)
+      FROM water_sources w
+      LEFT JOIN LATERAL (
+            SELECT wm.quantity_after FROM water_movements wm
+             WHERE wm.water_source_id = w.id
+             ORDER BY wm.movement_date DESC, wm.id DESC LIMIT 1) lm ON true
+     WHERE lm.quantity_after IS NOT NULL
+       AND lm.quantity_after <> w.available_quantity
+    UNION ALL
+    -- 2. ressource sous son seuil critique sans alerte ouverte
+    SELECT 'seuil_sans_alerte', w.id, w.name,
+           format('%s %s sous le seuil de %s %s, aucune alerte non lue',
+                  w.available_quantity, w.unit, w.critical_threshold, w.unit)
+      FROM water_sources w
+     WHERE w.status = 'active'
+       AND w.available_quantity <= w.critical_threshold
+       AND NOT EXISTS (SELECT 1 FROM alerts a
+                        WHERE a.water_source_id = w.id
+                          AND a.type = 'eau_critique'
+                          AND a.is_read = false)
+    UNION ALL
+    -- 3. irrigation consommatrice sans mouvement d'eau (violation RM-09)
+    SELECT 'irrigation_sans_mouvement', ws.id, ws.name,
+           format('irrigation #%s du %s sans mouvement d''eau',
+                  i.id, i.performed_at::date)
+      FROM irrigations i
+      JOIN water_sources ws ON ws.id = i.water_source_id
+     WHERE i.status IN ('validee', 'realisee')
+       AND NOT EXISTS (SELECT 1 FROM water_movements wm WHERE wm.irrigation_id = i.id)
+    UNION ALL
+    -- 4. mouvement sans irrigation rattachée alors que le type l'exige
+    SELECT 'mouvement_non_trace', ws.id, ws.name,
+           format('mouvement #%s de type %s sans irrigation', wm.id, wm.type)
+      FROM water_movements wm
+      JOIN water_sources ws ON ws.id = wm.water_source_id
+     WHERE wm.type = 'consommation'
+       AND wm.irrigation_id IS NULL
+     ORDER BY 1, 3;
+$$;
+
+COMMENT ON FUNCTION agriwater_water_audit() IS
+    'Contrôle d''intégrité du journal d''eau : réconciliation des stocks, seuils sans alerte, mouvements orphelins.';
+
+-- -----------------------------------------------------------------------------
+--  8.8 Périmètre d'accès d'un utilisateur (soutien à RM-01 côté application)
+--      Renvoie null pour farm_id quand l'utilisateur est administrateur global :
+--      c'est le seul cas où l'accès transverse est légitime.
+-- -----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION agriwater_user_scope(p_user_id bigint)
+RETURNS TABLE (
+    user_id    bigint,
+    user_name  varchar,
+    role       varchar,
+    farm_id    bigint,
+    farm_name  varchar,
+    can_cross  boolean,
+    permissions jsonb
+)
+LANGUAGE sql STABLE
+    SET search_path = agriwater, public AS $$
+    SELECT u.id, u.name, r.name, u.farm_id, f.name,
+           (u.farm_id IS NULL AND r.name = 'administrateur'),
+           r.permissions
+      FROM users u
+      JOIN roles r   ON r.id = u.role_id
+      LEFT JOIN farms f ON f.id = u.farm_id
+     WHERE u.id = p_user_id;
+$$;
+
+COMMENT ON FUNCTION agriwater_user_scope(bigint) IS
+    'Périmètre d''accès d''un utilisateur : exploitation rattachée, rôle, droits et droit de lecture transverse.';
+
+
+-- =============================================================================
+--  9. DOCUMENTATION DES COLONNES
+--
+--      Toute colonne de la base est décrite ici. Objectif : que la structure
+--      soit lisible sans ouvrir le CDC ni le code : \d agriwater.irrigations
+--      ou un introspection d'ORM restitue la documentation métier.
+-- =============================================================================
+
+COMMENT ON COLUMN agriwater.activities.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.activities.farm_id IS 'Exploitation concernée.';
+COMMENT ON COLUMN agriwater.activities.campaign_id IS 'Campagne concernée, si l''activité s''y rattache.';
+COMMENT ON COLUMN agriwater.activities.plot_id IS 'Parcelle concernée.';
+COMMENT ON COLUMN agriwater.activities.user_id IS 'Agent ayant réalisé l''activité.';
+COMMENT ON COLUMN agriwater.activities.type IS 'Nature de l''activité : semis, fertilisation, récolte, irrigation, désherbage…';
+COMMENT ON COLUMN agriwater.activities.activity_date IS 'Date de réalisation. Colonne de partitionnement mensuelle.';
+COMMENT ON COLUMN agriwater.activities.description IS 'Description détaillée de l''activité.';
+COMMENT ON COLUMN agriwater.activities.cost IS 'Coût imputé à la campagne (main-d''œuvre, intrants…).';
+COMMENT ON COLUMN agriwater.activities.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.activities.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.activity_logs.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.activity_logs.farm_id IS 'Exploitation concernée, NULL pour une opération globale (rôles, comptes).';
+COMMENT ON COLUMN agriwater.activity_logs.user_id IS 'Auteur de l''opération, déduit du paramètre de session agriwater.user_id.';
+COMMENT ON COLUMN agriwater.activity_logs.action IS 'Opération journalisée (insert, update, validate…).';
+COMMENT ON COLUMN agriwater.activity_logs.entity_type IS 'Table concernée.';
+COMMENT ON COLUMN agriwater.activity_logs.entity_id IS 'Ligne concernée.';
+COMMENT ON COLUMN agriwater.activity_logs.description IS 'Description lisible de l''opération.';
+COMMENT ON COLUMN agriwater.activity_logs.ip_address IS 'Adresse IP de l''appelant.';
+COMMENT ON COLUMN agriwater.activity_logs.user_agent IS 'User-Agent de l''appelant.';
+COMMENT ON COLUMN agriwater.activity_logs.created_at IS 'Horodatage de l''événement. Colonne de partitionnement mensuelle.';
+COMMENT ON COLUMN agriwater.alerts.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.alerts.farm_id IS 'Exploitation destinataire de l''alerte.';
+COMMENT ON COLUMN agriwater.alerts.water_source_id IS 'Ressource concernée. CHECK : exactement un des troisForeign_key est renseigné.';
+COMMENT ON COLUMN agriwater.alerts.input_id IS 'Intrant concerné.';
+COMMENT ON COLUMN agriwater.alerts.campaign_id IS 'Campagne concernée.';
+COMMENT ON COLUMN agriwater.alerts.type IS 'eau_critique, stock_critique, campagne_a_risque ou systeme.';
+COMMENT ON COLUMN agriwater.alerts.severity IS 'Gravité : info, avertissement ou critique.';
+COMMENT ON COLUMN agriwater.alerts.title IS 'Titre court affiché dans la liste des alertes.';
+COMMENT ON COLUMN agriwater.alerts.message IS 'Détail de l''alerte et action recommandée.';
+COMMENT ON COLUMN agriwater.alerts.is_read IS 'Alerte traitée par un utilisateur.';
+COMMENT ON COLUMN agriwater.alerts.read_at IS 'Date de traitement (cohérent avec is_read par CHECK).';
+COMMENT ON COLUMN agriwater.alerts.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.campaigns.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.campaigns.farm_id IS 'Exploitation qui porte la campagne.';
+COMMENT ON COLUMN agriwater.campaigns.plot_id IS 'Parcelle cultivée. Doit appartenir à la même exploitation (RM-01).';
+COMMENT ON COLUMN agriwater.campaigns.crop_id IS 'Culture produite pendant la campagne.';
+COMMENT ON COLUMN agriwater.campaigns.manager_id IS 'Responsable qui encadre la campagne.';
+COMMENT ON COLUMN agriwater.campaigns.code IS 'Code de campagne, unique par exploitation (ex. CAMP-TOM-2026-001).';
+COMMENT ON COLUMN agriwater.campaigns.name IS 'Nom lisible de la campagne.';
+COMMENT ON COLUMN agriwater.campaigns.start_date IS 'Date de début prévue.';
+COMMENT ON COLUMN agriwater.campaigns.expected_end_date IS 'Date de fin prévue. Une campagne active qui la dépasse est à risque.';
+COMMENT ON COLUMN agriwater.campaigns.actual_end_date IS 'Date de fin réelle, renseignée à la clôture (agriwater_close_campaign).';
+COMMENT ON COLUMN agriwater.campaigns.area IS 'Superficie de la campagne, en m².';
+COMMENT ON COLUMN agriwater.campaigns.status IS 'Avancement : planifiee, active, suspendue, terminee ou annulee. Une campagne close n''accepte plus d''opération (RM-11).';
+COMMENT ON COLUMN agriwater.campaigns.notes IS 'Notes libres sur la campagne.';
+COMMENT ON COLUMN agriwater.campaigns.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.campaigns.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.crops.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.crops.name IS 'Nom de la culture.';
+COMMENT ON COLUMN agriwater.crops.category IS 'Catégorie (maraîchère, céréalière, fruitière…).';
+COMMENT ON COLUMN agriwater.crops.estimated_duration_days IS 'Durée de cycle estimée, en jours.';
+COMMENT ON COLUMN agriwater.crops.water_requirement IS 'Besoin en eau de la culture, en litres par m² et par cycle. Alimente le score de priorité § 6.10.';
+COMMENT ON COLUMN agriwater.crops.production_unit IS 'Unité de production de la culture (kg, t, unité…).';
+COMMENT ON COLUMN agriwater.crops.status IS 'Culture active ou archivée.';
+COMMENT ON COLUMN agriwater.crops.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.crops.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.expenses.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.expenses.farm_id IS 'Exploitation qui engage la dépense.';
+COMMENT ON COLUMN agriwater.expenses.campaign_id IS 'Campagne imputée. Interdite si la campagne est close (RM-11).';
+COMMENT ON COLUMN agriwater.expenses.user_id IS 'Auteur de la saisie.';
+COMMENT ON COLUMN agriwater.expenses.expense_date IS 'Date de la dépense.';
+COMMENT ON COLUMN agriwater.expenses.amount IS 'Montant en Ariary, strictement positif.';
+COMMENT ON COLUMN agriwater.expenses.category IS 'Nature de la dépense : semences, engrais, carburant, main-d''œuvre, achat d''eau…';
+COMMENT ON COLUMN agriwater.expenses.description IS 'Libellé de la dépense.';
+COMMENT ON COLUMN agriwater.expenses.receipt_path IS 'Chemin du justificatif (photo de reçu).';
+COMMENT ON COLUMN agriwater.expenses.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.expenses.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.farms.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.farms.name IS 'Nom de l''exploitation.';
+COMMENT ON COLUMN agriwater.farms.location IS 'Localisation administrative (région, district, commune).';
+COMMENT ON COLUMN agriwater.farms.type IS 'Type d''activité (maraîchage, riziculture, mixte…).';
+COMMENT ON COLUMN agriwater.farms.total_area IS 'Superficie totale déclarée, en m².';
+COMMENT ON COLUMN agriwater.farms.manager_id IS 'Responsable de l''exploitation. Doit appartenir à la ferme ou être administrateur global (RM-01).';
+COMMENT ON COLUMN agriwater.farms.status IS 'État de l''exploitation : active, suspendue ou inactive.';
+COMMENT ON COLUMN agriwater.farms.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.farms.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.harvests.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.harvests.farm_id IS 'Exploitation qui a récolté.';
+COMMENT ON COLUMN agriwater.harvests.campaign_id IS 'Campagne concernée.';
+COMMENT ON COLUMN agriwater.harvests.plot_id IS 'Parcelle récoltée.';
+COMMENT ON COLUMN agriwater.harvests.user_id IS 'Agent ayant effectué la récolte.';
+COMMENT ON COLUMN agriwater.harvests.product IS 'Produit récolté.';
+COMMENT ON COLUMN agriwater.harvests.harvest_date IS 'Date de la récolte.';
+COMMENT ON COLUMN agriwater.harvests.quantity IS 'Quantité récoltée, strictement positive. Elle plafonne la quantité vendue (RM-13).';
+COMMENT ON COLUMN agriwater.harvests.unit IS 'Unité de la quantité (kg, t…).';
+COMMENT ON COLUMN agriwater.harvests.quality IS 'Qualité commerciale (extra, première catégorie…).';
+COMMENT ON COLUMN agriwater.harvests.loss_quantity IS 'Pertes au champ ou au stockage, incluses dans la quantité récoltée.';
+COMMENT ON COLUMN agriwater.harvests.observation IS 'Remarque sur la récolte.';
+COMMENT ON COLUMN agriwater.harvests.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.harvests.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.inputs.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.inputs.farm_id IS 'Exploitation propriétaire du stock.';
+COMMENT ON COLUMN agriwater.inputs.name IS 'Désignation de l''intrant.';
+COMMENT ON COLUMN agriwater.inputs.category IS 'Famille d''intrant : semence, engrais, carburant, tuyau, pièce de pompe…';
+COMMENT ON COLUMN agriwater.inputs.unit IS 'Unité de conditionnement (kg, L, m, pièce…).';
+COMMENT ON COLUMN agriwater.inputs.minimum_threshold IS 'Stock d''alerte. En dessous, une alerte « stock critique » est levée (RM-08) et le stock ne peut plus être modifié sans mouvement tracé (RM-12).';
+COMMENT ON COLUMN agriwater.inputs.available_quantity IS 'Stock disponible. Ne peut jamais être négatif (RM-12).';
+COMMENT ON COLUMN agriwater.inputs.unit_price IS 'Prix unitaire d''achat.';
+COMMENT ON COLUMN agriwater.inputs.supplier IS 'Fournisseur habituel.';
+COMMENT ON COLUMN agriwater.inputs.status IS 'Intrant actif ou archivé.';
+COMMENT ON COLUMN agriwater.inputs.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.inputs.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.irrigation_schedules.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.irrigation_schedules.farm_id IS 'Exploitation concernée.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.campaign_id IS 'Campagne à laquelle l''irrigation est rattachée.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.plot_id IS 'Parcelle à irriguer.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.water_source_id IS 'Ressource prévue. N''a aucun effet sur le stock tant que l''irrigation n''est pas réalisée.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.agent_id IS 'Agent chargé de l''exécution.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.scheduled_date IS 'Date prévue de l''irrigation.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.scheduled_time IS 'Heure prévue.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.estimated_quantity IS 'Volume estimé, dans l''unité de la ressource.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.priority IS 'Priorité de la tâche selon le module personnel § 6.10.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.status IS 'planifiee, realisee (clôturée automatiquement par trg_irrigations_sync_schedule), reportee ou annulee.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.comment IS 'Précisions sur la tâche.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.irrigation_schedules.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.irrigations.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.irrigations.farm_id IS 'Exploitation qui a réalisé l''irrigation.';
+COMMENT ON COLUMN agriwater.irrigations.campaign_id IS 'Campagne irriguée.';
+COMMENT ON COLUMN agriwater.irrigations.plot_id IS 'Parcelle irriguée. Doit correspondre à la parcelle de la campagne (RM-07).';
+COMMENT ON COLUMN agriwater.irrigations.water_source_id IS 'Ressource consommée.';
+COMMENT ON COLUMN agriwater.irrigations.performed_by IS 'Agent ayant exécuté l''irrigation.';
+COMMENT ON COLUMN agriwater.irrigations.validated_by IS 'Responsable ayant validé. Obligatoire au-delà du seuil de 2 000 L (RM-10).';
+COMMENT ON COLUMN agriwater.irrigations.scheduled_at IS 'Date et heure initialement planifiées.';
+COMMENT ON COLUMN agriwater.irrigations.performed_at IS 'Date et heure réelles de l''exécution. Colonne de partitionnement de la vue de consommation.';
+COMMENT ON COLUMN agriwater.irrigations.quantity IS 'Volume consommé, strictement positif (RM-03), dans l''unité ci-dessous.';
+COMMENT ON COLUMN agriwater.irrigations.unit IS 'Unité du volume saisi : L ou m3.';
+COMMENT ON COLUMN agriwater.irrigations.duration_minutes IS 'Durée de l''irrigation, en minutes.';
+COMMENT ON COLUMN agriwater.irrigations.method IS 'Mode d''arrosage employé.';
+COMMENT ON COLUMN agriwater.irrigations.status IS ' brouillon, planifiee, en_attente_validation, validee, realisee, annulee ou refusee. Seules « validee » et « realisee » consomment réellement de l''eau.';
+COMMENT ON COLUMN agriwater.irrigations.observation IS 'Remarque terrain.';
+COMMENT ON COLUMN agriwater.irrigations.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.irrigations.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.plots.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.plots.farm_id IS 'Exploitation propriétaire (racine du cloisonnement RM-01).';
+COMMENT ON COLUMN agriwater.plots.code IS 'Code de la parcelle, unique au sein de l''exploitation (ex. P-A01).';
+COMMENT ON COLUMN agriwater.plots.name IS 'Nom lisible de la parcelle.';
+COMMENT ON COLUMN agriwater.plots.area IS 'Superficie déclarée, dans l''unité ci-dessous.';
+COMMENT ON COLUMN agriwater.plots.area_unit IS 'Unité de la superficie : m2 ou ha (normalisée par agriwater_to_m2).';
+COMMENT ON COLUMN agriwater.plots.location IS 'Localisation de la parcelle au sein de l''exploitation.';
+COMMENT ON COLUMN agriwater.plots.soil_type IS 'Type de sol (argileux, sableux, limoneux…).';
+COMMENT ON COLUMN agriwater.plots.status IS 'État de la parcelle : disponible, en_culture, en_repos ou indisponible.';
+COMMENT ON COLUMN agriwater.plots.manual_priority IS 'Priorité fixée à la main par le responsable. Module personnel § 6.10.';
+COMMENT ON COLUMN agriwater.plots.soil_moisture IS 'Humidité du sol mesurée, en pourcentage (0-100). Module personnel § 6.10.';
+COMMENT ON COLUMN agriwater.plots.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.plots.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.revenues.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.revenues.farm_id IS 'Exploitation qui encaisse la recette.';
+COMMENT ON COLUMN agriwater.revenues.campaign_id IS 'Campagne imputée.';
+COMMENT ON COLUMN agriwater.revenues.harvest_id IS 'Récolte vendue. Si renseignée, la quantité est plafonnée par la récolte (RM-13).';
+COMMENT ON COLUMN agriwater.revenues.user_id IS 'Auteur de la saisie.';
+COMMENT ON COLUMN agriwater.revenues.revenue_date IS 'Date d''encaissement.';
+COMMENT ON COLUMN agriwater.revenues.amount IS 'Montant en Ariary, strictement positif.';
+COMMENT ON COLUMN agriwater.revenues.product IS 'Produit vendu.';
+COMMENT ON COLUMN agriwater.revenues.quantity IS 'Quantité vendue, dans l''unité ci-dessous.';
+COMMENT ON COLUMN agriwater.revenues.unit IS 'Unité de vente (kg, t…).';
+COMMENT ON COLUMN agriwater.revenues.client IS 'Client acheteur.';
+COMMENT ON COLUMN agriwater.revenues.comment IS 'Précisions sur la vente.';
+COMMENT ON COLUMN agriwater.revenues.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.revenues.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.roles.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.roles.name IS 'Nom du rôle : administrateur, responsable ou agent (contraint par CHECK).';
+COMMENT ON COLUMN agriwater.roles.description IS 'Description lisible du rôle.';
+COMMENT ON COLUMN agriwater.roles.permissions IS 'Droits accordés, au format JSONB (ex. ["plots.*","water.*"]). Index GIN pour le filtrage.';
+COMMENT ON COLUMN agriwater.roles.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.roles.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.stock_movements.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.stock_movements.farm_id IS 'Exploitation concernée.';
+COMMENT ON COLUMN agriwater.stock_movements.input_id IS 'Intrant dont le stock varie.';
+COMMENT ON COLUMN agriwater.stock_movements.campaign_id IS 'Campagne imputée, le cas échéant.';
+COMMENT ON COLUMN agriwater.stock_movements.user_id IS 'Auteur du mouvement.';
+COMMENT ON COLUMN agriwater.stock_movements.type IS 'stock_initial, entree, sortie, consommation ou ajustement.';
+COMMENT ON COLUMN agriwater.stock_movements.quantity IS 'Quantité déplacée, valeur absolue.';
+COMMENT ON COLUMN agriwater.stock_movements.stock_before IS 'Stock avant le mouvement.';
+COMMENT ON COLUMN agriwater.stock_movements.stock_after IS 'Stock après le mouvement.';
+COMMENT ON COLUMN agriwater.stock_movements.movement_date IS 'Date et heure du mouvement.';
+COMMENT ON COLUMN agriwater.stock_movements.note IS 'Motif du mouvement.';
+COMMENT ON COLUMN agriwater.stock_movements.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.users.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.users.farm_id IS 'Exploitation de rattachement. NULL = administrateur global (seul cas autorisé à lire plusieurs fermes).';
+COMMENT ON COLUMN agriwater.users.role_id IS 'Rôle applicatif (administrateur, responsable, agent).';
+COMMENT ON COLUMN agriwater.users.name IS 'Nom et prénom de l''utilisateur.';
+COMMENT ON COLUMN agriwater.users.email IS 'Adresse e-mail, identifiant de connexion (unique).';
+COMMENT ON COLUMN agriwater.users.password IS 'Empreinte du mot de passe (bcrypt). Jamais stockée en clair.';
+COMMENT ON COLUMN agriwater.users.email_verified_at IS 'Date de validation de l''adresse e-mail.';
+COMMENT ON COLUMN agriwater.users.phone IS 'Numéro de téléphone.';
+COMMENT ON COLUMN agriwater.users.is_active IS 'Compte actif. Un compte désactivé ne peut plus se connecter.';
+COMMENT ON COLUMN agriwater.users.last_login_at IS 'Dernière connexion réussie.';
+COMMENT ON COLUMN agriwater.users.remember_token IS 'Jeton du cookie « se souvenir de moi ».';
+COMMENT ON COLUMN agriwater.users.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.users.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
+COMMENT ON COLUMN agriwater.water_movements.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.water_movements.farm_id IS 'Exploitation concernée.';
+COMMENT ON COLUMN agriwater.water_movements.water_source_id IS 'Ressource dont le stock varie.';
+COMMENT ON COLUMN agriwater.water_movements.campaign_id IS 'Campagne imputée, si le mouvement en découle.';
+COMMENT ON COLUMN agriwater.water_movements.irrigation_id IS 'Irrigation à l''origine du mouvement de consommation.';
+COMMENT ON COLUMN agriwater.water_movements.user_id IS 'Auteur du mouvement.';
+COMMENT ON COLUMN agriwater.water_movements.type IS 'Nature du mouvement : stock_initial, remplissage, consommation, perte, ajustement, correction, vidange ou transfert.';
+COMMENT ON COLUMN agriwater.water_movements.quantity IS 'Volume déplacé, valeur absolue, dans l''unité de la ressource.';
+COMMENT ON COLUMN agriwater.water_movements.quantity_before IS 'Stock avant le mouvement.';
+COMMENT ON COLUMN agriwater.water_movements.quantity_after IS 'Stock après le mouvement. La cohérence des trois valeurs est garantie par CHECK.';
+COMMENT ON COLUMN agriwater.water_movements.movement_date IS 'Date et heure du mouvement. Colonne de partitionnement mensuelle.';
+COMMENT ON COLUMN agriwater.water_movements.note IS 'Motif du mouvement.';
+COMMENT ON COLUMN agriwater.water_movements.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.water_sources.id IS 'Identifiant technique (bigserial).';
+COMMENT ON COLUMN agriwater.water_sources.farm_id IS 'Exploitation propriétaire de la ressource.';
+COMMENT ON COLUMN agriwater.water_sources.name IS 'Nom de la ressource (Puits Est, Réservoir principal…).';
+COMMENT ON COLUMN agriwater.water_sources.type IS 'Nature : puits, citerne, bassin, reservoir, canal, riviere ou reserve_pluie.';
+COMMENT ON COLUMN agriwater.water_sources.capacity IS 'Capacité maximale, dans l''unité ci-dessous.';
+COMMENT ON COLUMN agriwater.water_sources.available_quantity IS 'Stock actuellement disponible. Ne peut jamais être négatif (RM-04) ni dépasser la capacité (RM-05). Toute variation doit être justifiée par un mouvement tracé (RM-09).';
+COMMENT ON COLUMN agriwater.water_sources.unit IS 'Unité de mesure du volume : L ou m3.';
+COMMENT ON COLUMN agriwater.water_sources.critical_threshold IS 'Seuil sous lequel une alerte « eau critique » est levée automatiquement (RM-08).';
+COMMENT ON COLUMN agriwater.water_sources.location IS 'Localisation de la ressource.';
+COMMENT ON COLUMN agriwater.water_sources.status IS 'operative (active), en maintenance ou inutilisable (RM-02).';
+COMMENT ON COLUMN agriwater.water_sources.created_at IS 'Horodatage de création.';
+COMMENT ON COLUMN agriwater.water_sources.updated_at IS 'Horodatage de dernière modification (maintenu par le déclencheur trg_*_updated_at).';
 
 COMMIT;
