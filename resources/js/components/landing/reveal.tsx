@@ -1,4 +1,4 @@
-import type { CSSProperties, ElementType, ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 import { cn } from '../../lib/cn';
 import { useInView } from '../../hooks/use-in-view';
@@ -9,7 +9,6 @@ type RevealProps = {
     /** Retard séquentiel, en millisecondes. */
     delay?: number;
     className?: string;
-    as?: ElementType;
 };
 
 /**
@@ -17,13 +16,13 @@ type RevealProps = {
  * L'animation est entièrement désactivée si l'utilisateur a demandé
  * une réduction des animations.
  */
-export function Reveal({ children, delay = 0, className, as }: RevealProps) {
+export function Reveal({ children, delay = 0, className }: RevealProps) {
     const { ref, inView } = useInView<HTMLDivElement>();
     const reducedMotion = useReducedMotion();
     const visible = inView || reducedMotion;
 
     const style: CSSProperties = reducedMotion
-        ? undefined
+        ? {}
         : {
               transitionDelay: `${delay}ms`,
               transitionProperty: 'opacity, transform',
