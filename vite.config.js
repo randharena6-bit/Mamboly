@@ -21,4 +21,27 @@ export default defineConfig({
             ignored: ['**/storage/framework/views/**'],
         },
     },
+    build: {
+        rollupOptions: {
+            output: {
+                // Découpage des dépendances lourdes pour optimiser le cache navigateur.
+                manualChunks(id) {
+                    if (!id.includes('node_modules')) return;
+                    if (id.includes('recharts') || id.includes('d3-') || id.includes('victory-vendor')) {
+                        return 'charts';
+                    }
+                    if (id.includes('lucide-react')) return 'icons';
+                    if (id.includes('@radix-ui')) return 'radix';
+                    if (
+                        id.includes('react-dom') ||
+                        id.includes('/react/') ||
+                        id.includes('/react-is/') ||
+                        id.includes('/scheduler/')
+                    ) {
+                        return 'react';
+                    }
+                },
+            },
+        },
+    },
 });

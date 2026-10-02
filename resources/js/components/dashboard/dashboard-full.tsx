@@ -1,7 +1,6 @@
 import { Bell, ChartPie, Droplets, LayoutDashboard, MapPin, Package, Sprout, Wallet } from 'lucide-react';
 import { useMemo } from 'react';
 
-import { cn } from '../../lib/cn';
 import {
     activeFarm,
     cashflow,
@@ -349,5 +348,3 @@ function LockGlyph() {
         </svg>
     );
 }
-
-export { cn };
