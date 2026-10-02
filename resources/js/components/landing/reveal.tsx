@@ -1,4 +1,5 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { createElement } from 'react';
+import type { CSSProperties, ElementType, ReactNode } from 'react';
 
 import { cn } from '../../lib/cn';
 import { useInView } from '../../hooks/use-in-view';
@@ -9,6 +10,8 @@ type RevealProps = {
     /** Retard séquentiel, en millisecondes. */
     delay?: number;
     className?: string;
+    /** Balise rendue, pour préserver la sémantique des listes. */
+    as?: ElementType;
 };
 
 /**
@@ -16,7 +19,7 @@ type RevealProps = {
  * L'animation est entièrement désactivée si l'utilisateur a demandé
  * une réduction des animations.
  */
-export function Reveal({ children, delay = 0, className }: RevealProps) {
+export function Reveal({ children, delay = 0, className, as = 'div' }: RevealProps) {
     const { ref, inView } = useInView<HTMLDivElement>();
     const reducedMotion = useReducedMotion();
     const visible = inView || reducedMotion;
@@ -28,17 +31,17 @@ export function Reveal({ children, delay = 0, className }: RevealProps) {
               transitionProperty: 'opacity, transform',
           };
 
-    return (
-        <div
-            ref={ref}
-            style={style}
-            className={cn(
+    return createElement(
+        as,
+        {
+            ref,
+            style,
+            className: cn(
                 'transition-[opacity,transform] duration-700 ease-out motion-reduce:transition-none',
                 visible ? 'translate-y-0 opacity-100' : 'translate-y-5 opacity-0',
                 className,
-            )}
-        >
-            {children}
-        </div>
+            ),
+        },
+        children,
     );
 }

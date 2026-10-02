@@ -74,8 +74,8 @@ export function ProblemSolution() {
                             const Icon = item.icon;
 
                             return (
-                                <Reveal key={item.text} delay={180 + index * 70}>
-                                    <li className="flex items-start gap-3.5 rounded-2xl border border-harvest-100 bg-white/70 p-4 transition-colors duration-300 hover:border-harvest-200 hover:bg-white">
+                                <Reveal key={item.text} as="li" delay={180 + index * 70}>
+                                    <div className="flex items-start gap-3.5 rounded-2xl border border-harvest-100 bg-white/70 p-4 transition-colors duration-300 hover:border-harvest-200 hover:bg-white">
                                         <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-harvest-50 text-harvest-700 ring-1 ring-harvest-100">
                                             <Icon aria-hidden="true" className="size-4.5" />
                                         </span>
@@ -86,7 +86,7 @@ export function ProblemSolution() {
                                         >
                                             <X className="size-3.5" />
                                         </span>
-                                    </li>
+                                    </div>
                                 </Reveal>
                             );
                         })}

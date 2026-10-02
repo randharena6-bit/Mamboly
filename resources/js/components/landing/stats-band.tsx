@@ -34,13 +34,14 @@ export function StatsBand() {
         <section aria-label="Chiffres clés d’AgriWater" className="relative py-14 sm:py-16">
             <div className="mx-auto w-full max-w-7xl px-5 sm:px-6 lg:px-8">
                 <div className="overflow-hidden rounded-3xl border border-ink-100 bg-white p-2 shadow-soft">
-                    <dl className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                    <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
                         {stats.map((stat, index) => {
                             const Icon = stat.icon;
 
                             return (
                                 <Reveal
                                     key={stat.value}
+                                    as="li"
                                     delay={index * 90}
                                     className="group rounded-2xl transition-colors duration-300 hover:bg-sand-50"
                                 >
@@ -52,21 +53,18 @@ export function StatsBand() {
                                         </span>
 
                                         <div className="min-w-0">
-                                            <dt className="sr-only">{stat.label}</dt>
-                                            <dd>
-                                                <span className="block font-display text-lg font-extrabold tracking-tight text-ink-900">
-                                                    {stat.value}
-                                                </span>
-                                                <span className="mt-1 block text-sm leading-snug text-ink-500">
-                                                    {stat.label}
-                                                </span>
-                                            </dd>
+                                            <p className="font-display text-lg font-extrabold tracking-tight text-ink-900">
+                                                {stat.value}
+                                            </p>
+                                            <p className="mt-1 text-sm leading-snug text-ink-500">
+                                                {stat.label}
+                                            </p>
                                         </div>
                                     </div>
                                 </Reveal>
                             );
                         })}
-                    </dl>
+                    </ul>
                 </div>
             </div>
         </section>

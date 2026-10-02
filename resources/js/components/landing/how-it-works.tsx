@@ -60,8 +60,8 @@ export function HowItWorks() {
                         const Icon = step.icon;
 
                         return (
-                            <Reveal key={step.title} delay={index * 110} className="relative">
-                                <li className="group relative flex h-full flex-col items-center text-center lg:px-4">
+                            <Reveal key={step.title} as="li" delay={index * 110} className="relative">
+                                <div className="group relative flex h-full flex-col items-center text-center lg:px-4">
                                     {/* Pastille numérotée */}
                                     <span className="relative z-10 grid size-14 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-brand-600 to-water-600 text-white shadow-card transition-transform duration-300 group-hover:scale-105 group-hover:shadow-lift">
                                         <Icon aria-hidden="true" className="size-6" />
@@ -88,7 +88,7 @@ export function HowItWorks() {
                                             </li>
                                         ))}
                                     </ul>
-                                </li>
+                                </div>
                             </Reveal>
                         );
                     })}

@@ -80,8 +80,8 @@ export function Security() {
                     const Icon = item.icon;
 
                     return (
-                        <Reveal key={item.title} delay={index * 90}>
-                            <li className="group flex h-full flex-col rounded-2xl border border-white bg-white/85 p-5 shadow-soft backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:bg-white hover:shadow-card">
+                        <Reveal key={item.title} as="li" delay={index * 90}>
+                            <div className="group flex h-full flex-col rounded-2xl border border-white bg-white/85 p-5 shadow-soft backdrop-blur-sm transition-all duration-300 hover:-translate-y-1 hover:bg-white hover:shadow-card">
                                 <span className="grid size-11 place-items-center rounded-xl bg-brand-700 text-white shadow-soft transition-transform duration-300 group-hover:scale-105">
                                     <Icon aria-hidden="true" className="size-5" />
                                 </span>
@@ -89,7 +89,7 @@ export function Security() {
                                     {item.title}
                                 </h3>
                                 <p className="mt-2 text-sm leading-relaxed text-ink-500">{item.text}</p>
-                            </li>
+                            </div>
                         </Reveal>
                     );
                 })}
