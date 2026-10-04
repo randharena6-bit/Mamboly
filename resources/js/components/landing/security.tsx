@@ -115,7 +115,7 @@ export function Security() {
                         <ul className="grid gap-4 sm:grid-cols-3">
                             {farms.map((farm, index) => (
                                 <li key={farm.name} className="group relative">
-                                    <Reveal delay={index * 100}>
+                                    <Reveal delay={index * 100} className="h-full">
                                         <div className="h-full rounded-2xl border border-ink-100 bg-white p-4 shadow-soft transition-all duration-300 hover:-translate-y-1 hover:shadow-card">
                                             <div className="flex items-center gap-2.5">
                                                 <span

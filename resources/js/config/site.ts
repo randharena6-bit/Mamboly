@@ -11,7 +11,7 @@ export const routes = {
     features: '/features',
     security: '/security',
     pricing: '/pricing',
-    demo: '/register?demo=1',
+    demo: '/demo',
 } as const;
 
 export type NavLink = {

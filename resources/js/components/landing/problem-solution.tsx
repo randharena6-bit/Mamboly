@@ -14,7 +14,7 @@ import {
     Wallet,
     X,
 } from 'lucide-react';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 
 import { cn } from '../../lib/cn';
 import { routes } from '../../config/site';
@@ -190,7 +190,7 @@ function PanelShell({
 }: {
     title: string;
     tone: 'muted' | 'active';
-    children: React.ReactNode;
+    children: ReactNode;
     footer: { icon: ComponentType<{ className?: string }>; text: string };
 }) {
     const FooterIcon = footer.icon;

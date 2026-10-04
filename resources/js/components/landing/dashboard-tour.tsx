@@ -5,7 +5,6 @@ import { routes } from '../../config/site';
 import { DashboardFull, type DashboardViewState } from '../dashboard/dashboard-full';
 import { cn } from '../../lib/cn';
 import { Button } from '../ui/button';
-import { GridPattern } from './decorations';
 import { Reveal } from './reveal';
 import { Section } from './section';
 
@@ -70,7 +69,6 @@ export function DashboardTour() {
                     </div>
 
                     <div className="relative">
-                        <GridPattern id="agri-tour-grid" className="hidden opacity-0 lg:block" />
                         <DashboardFull view={view} />
                     </div>
                 </div>
