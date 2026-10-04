@@ -16,6 +16,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=Plus+Jakarta+Sans:wght@600..800&display=swap" rel="stylesheet">
 
+    @include('partials.react-preamble')
     @vite(['resources/css/app.css', 'resources/js/landing.tsx'])
 </head>
 <body class="min-h-screen bg-white font-sans text-ink-900 antialiased">
