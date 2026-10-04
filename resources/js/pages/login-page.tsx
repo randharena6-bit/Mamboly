@@ -29,7 +29,13 @@ export function LoginPage() {
         } catch (error) {
             if (error instanceof FormError) {
                 setErrors(error.errors);
-                setMessage(Object.keys(error.errors).length ? '' : error.message);
+                // Le résumé serveur n'est pas traduit : on n'affiche que les
+                // erreurs de champ, ou un texte générique en français.
+                setMessage(
+                    Object.keys(error.errors).length
+                        ? ''
+                        : 'Connexion impossible. Vérifiez vos identifiants.',
+                );
             } else {
                 setMessage('Connexion impossible. Vérifiez votre réseau et réessayez.');
             }

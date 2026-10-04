@@ -34,7 +34,13 @@ export function RegisterPage() {
         } catch (error) {
             if (error instanceof FormError) {
                 setErrors(error.errors);
-                setMessage(Object.keys(error.errors).length ? '' : error.message);
+                // Le résumé serveur n'est pas traduit : on n'affiche que les
+                // erreurs de champ, ou un texte générique en français.
+                setMessage(
+                    Object.keys(error.errors).length
+                        ? ''
+                        : 'Inscription impossible. Vérifiez les informations saisies.',
+                );
             } else {
                 setMessage('Inscription impossible. Vérifiez votre réseau et réessayez.');
             }
