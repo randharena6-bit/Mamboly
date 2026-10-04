@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Auth\AuthenticatedSessionController;
+use App\Http\Controllers\Auth\RegisteredUserController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -67,23 +69,23 @@ foreach ($pages as $slug => $page) {
 | Authentification
 |--------------------------------------------------------------------------
 |
-| Les écrans /login et /register remplacent ces routes dès que l’authentification
-| Laravel (Breeze, Jetstream, Filament) est installée : ces paquets définissent
-| /login et /register sur les mêmes verbes, leurs routes prendront le dessus.
+| Authentification par session, écrite à la main : les écrans sont montés par
+| React (`resources/views/auth/`) et les routesrespondent en JSON aux requêtes
+| `Accept: application/json` des formulaires, ou par redirection sinon.
 |
 */
 
-Route::view('/login', 'stub', [
-    'title' => 'Connexion',
-    'eyebrow' => 'Espace membre',
-    'description' => 'L’écran de connexion sera alimenté par l’authentification Laravel. Renseignez les identifiants de votre exploitation.',
-])->name('login');
+Route::middleware('guest')->group(function (): void {
+    Route::get('/login', [AuthenticatedSessionController::class, 'create'])->name('login');
+    Route::post('/login', [AuthenticatedSessionController::class, 'store']);
 
-Route::view('/register', 'stub', [
-    'title' => 'Créer votre exploitation',
-    'eyebrow' => 'Inscription',
-    'description' => 'L’inscription vous permettra de créer votre première exploitation et d’inviter vos collaborateurs en quelques secondes.',
-])->name('register');
+    Route::get('/register', [RegisteredUserController::class, 'create'])->name('register');
+    Route::post('/register', [RegisteredUserController::class, 'store']);
+});
+
+Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])
+    ->middleware('auth')
+    ->name('logout');
 
 /*
 |--------------------------------------------------------------------------
