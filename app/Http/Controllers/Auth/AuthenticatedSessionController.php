@@ -13,15 +13,15 @@ use Illuminate\View\View;
 /**
  * Connexion et déconnexion par session.
  *
- * Les écrans sont rendus par React (`resources/views/auth/login.blade.php`) :
- * le contrôleur sert donc la coquille HTML, et répond en JSON aux requêtes
- * `Accept: application/json` envoyées par les formulaires.
+ * Les écrans sont rendus par React (`resources/views/auth/switch.blade.php`) :
+ * le contrôleur sert donc la coquille HTML du mode demandé, et répond en JSON
+ * aux requêtes `Accept: application/json` envoyées par les formulaires.
  */
 class AuthenticatedSessionController extends Controller
 {
     public function create(): View
     {
-        return view('auth.login');
+        return view('auth.switch', ['mode' => 'login', 'title' => 'Connexion']);
     }
 
     public function store(LoginRequest $request): JsonResponse|RedirectResponse

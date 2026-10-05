@@ -1,14 +1,13 @@
 import { LockKeyhole, Mail } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
-import { AuthShell, FormAlert } from '../components/auth/auth-shell';
-import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
-import { routes } from '../config/site';
-import { FormError, goTo, submitForm, type FieldErrors } from '../lib/forms';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { routes } from '../../config/site';
+import { FormError, goTo, submitForm, type FieldErrors } from '../../lib/forms';
+import { FormAlert } from './form-alert';
 
-/** Écran de connexion : POST /login, puis redirection vers le tableau de bord. */
-export function LoginPage() {
+export function LoginForm() {
     const [errors, setErrors] = useState<FieldErrors>({});
     const [message, setMessage] = useState('');
     const [pending, setPending] = useState(false);
@@ -29,8 +28,6 @@ export function LoginPage() {
         } catch (error) {
             if (error instanceof FormError) {
                 setErrors(error.errors);
-                // Le résumé serveur n'est pas traduit : on n'affiche que les
-                // erreurs de champ, ou un texte générique en français.
                 setMessage(
                     Object.keys(error.errors).length
                         ? ''
@@ -44,19 +41,7 @@ export function LoginPage() {
     }
 
     return (
-        <AuthShell
-            eyebrow="Espace membre"
-            title="Connexion"
-            subtitle="Renseignez les identifiants de votre exploitation."
-            footer={
-                <>
-                    Pas encore de compte ?{' '}
-                    <a href={routes.register} className="font-semibold text-brand-700 hover:underline">
-                        Créer votre exploitation
-                    </a>
-                </>
-            }
-        >
+        <>
             <FormAlert>{message}</FormAlert>
 
             <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
@@ -97,6 +82,6 @@ export function LoginPage() {
                     {pending ? 'Connexion…' : 'Se connecter'}
                 </Button>
             </form>
-        </AuthShell>
+        </>
     );
 }

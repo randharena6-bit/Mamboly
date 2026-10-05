@@ -70,8 +70,13 @@ foreach ($pages as $slug => $page) {
 |--------------------------------------------------------------------------
 |
 | Authentification par session, écrite à la main : les écrans sont montés par
-| React (`resources/views/auth/`) et les routesrespondent en JSON aux requêtes
-| `Accept: application/json` des formulaires, ou par redirection sinon.
+| React (`resources/views/auth/switch.blade.php`) et les routes répondent en
+| JSON aux requêtes `Accept: application/json` des formulaires, ou par
+| redirection sinon.
+|
+| `/login` et `/register` servent le même écran de switching : la vue reçoit le
+| mode initial, la bascule entre les deux se fait ensuite côté client en
+| remplaçant l'URL par `history.pushState`.
 |
 */
 

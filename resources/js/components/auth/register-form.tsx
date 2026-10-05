@@ -1,19 +1,13 @@
 import { LockKeyhole, Mail, MapPin, Phone, Sprout, User } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
-import { AuthShell, FormAlert } from '../components/auth/auth-shell';
-import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
-import { routes } from '../config/site';
-import { FormError, goTo, submitForm, type FieldErrors } from '../lib/forms';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
+import { routes } from '../../config/site';
+import { FormError, goTo, submitForm, type FieldErrors } from '../../lib/forms';
+import { FormAlert } from './form-alert';
 
-/**
- * Écran d'inscription : POST /register.
- *
- * Le compte created est rattaché à une exploitation et au rôle « responsable »
- * (voir `RegisteredUserController`) ; l'utilisateur devient son gestionnaire.
- */
-export function RegisterPage() {
+export function RegisterForm() {
     const [errors, setErrors] = useState<FieldErrors>({});
     const [message, setMessage] = useState('');
     const [pending, setPending] = useState(false);
@@ -34,8 +28,6 @@ export function RegisterPage() {
         } catch (error) {
             if (error instanceof FormError) {
                 setErrors(error.errors);
-                // Le résumé serveur n'est pas traduit : on n'affiche que les
-                // erreurs de champ, ou un texte générique en français.
                 setMessage(
                     Object.keys(error.errors).length
                         ? ''
@@ -49,19 +41,7 @@ export function RegisterPage() {
     }
 
     return (
-        <AuthShell
-            eyebrow="Inscription"
-            title="Créer votre exploitation"
-            subtitle="Quelques secondes suffisent : votre espace de gestion est prêt immédiatement."
-            footer={
-                <>
-                    Vous avez déjà un compte ?{' '}
-                    <a href={routes.login} className="font-semibold text-brand-700 hover:underline">
-                        Se connecter
-                    </a>
-                </>
-            }
-        >
+        <>
             <FormAlert>{message}</FormAlert>
 
             <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
@@ -149,6 +129,6 @@ export function RegisterPage() {
                     {pending ? 'Création…' : 'Créer mon exploitation'}
                 </Button>
             </form>
-        </AuthShell>
+        </>
     );
 }

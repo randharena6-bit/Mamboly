@@ -26,7 +26,10 @@ class RegisteredUserController extends Controller
 {
     public function create(): View
     {
-        return view('auth.register');
+        return view('auth.switch', [
+            'mode' => 'register',
+            'title' => 'Créer votre exploitation',
+        ]);
     }
 
     public function store(RegisterRequest $request): JsonResponse|RedirectResponse
