@@ -3,6 +3,7 @@
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\FarmController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -111,6 +112,29 @@ Route::get('/dashboard', [DashboardController::class, 'show'])
 Route::get('/dashboard/data', [DashboardController::class, 'data'])
     ->middleware('auth')
     ->name('dashboard.data');
+
+/*
+|--------------------------------------------------------------------------
+| Exploitations
+|--------------------------------------------------------------------------
+|
+| Page hybride : l'administrateur global y supervise toutes les exploitations,
+| tout autre compte y retrouve la sienne. Le mode est décidé côté serveur à
+| partir du rôle ; `FarmPolicy` refuse à un membre l'accès à une exploitation
+| qui n'est pas la sienne.
+|
+| Les segments littéraux sont déclarés avant `{exploitation}` pour ne pas être
+| capturés par le paramètre de route.
+|
+*/
+
+Route::middleware('auth')->group(function (): void {
+    Route::get('/exploitations', [FarmController::class, 'index'])->name('exploitations.index');
+    Route::get('/exploitations/data', [FarmController::class, 'data'])->name('exploitations.data');
+
+    Route::get('/exploitations/{farm}', [FarmController::class, 'show'])->name('exploitations.show');
+    Route::get('/exploitations/{farm}/data', [FarmController::class, 'showData'])->name('exploitations.show.data');
+});
 
 Route::view('/demo', 'stub', [
     'title' => 'Démonstration',

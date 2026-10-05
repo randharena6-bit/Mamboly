@@ -62,6 +62,12 @@ class Campaign extends Model
         return $this->belongsTo(Plot::class);
     }
 
+    /** @return BelongsTo<Crop, $this> */
+    public function crop(): BelongsTo
+    {
+        return $this->belongsTo(Crop::class);
+    }
+
     /** @return HasMany<Irrigation, $this> */
     public function irrigations(): HasMany
     {

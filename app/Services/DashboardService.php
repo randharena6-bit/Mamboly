@@ -64,7 +64,7 @@ class DashboardService
             'user' => [
                 'name' => $user->name,
                 'role' => $user->role?->name,
-                'initials' => $this->initials($user->name),
+                'initials' => $user->initials(),
             ],
             'generatedAt' => $now->toIso8601String(),
             'stats' => $this->stats($farm, $now),
@@ -426,12 +426,5 @@ class DashboardService
         ));
 
         return $filled === $months ? $months : $filled;
-    }
-
-    private function initials(string $name): string
-    {
-        $parts = preg_split('/\s+/', trim($name)) ?: [];
-
-        return mb_strtoupper(mb_substr((string) ($parts[0] ?? ''), 0, 1).mb_substr((string) (end($parts) ?: ''), 0, 1));
     }
 }

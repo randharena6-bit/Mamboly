@@ -77,4 +77,24 @@ class User extends Authenticatable
     {
         return (bool) $this->is_active;
     }
+
+    /**
+     * Administrateur global : rôle `administrateur` et aucune exploitation de
+     * rattachement. C'est le seul profil autorisé à superviser les autres
+     * exploitations.
+     */
+    public function isAdministrator(): bool
+    {
+        return $this->farm_id === null && $this->role?->name === 'administrateur';
+    }
+
+    /** Initiales affichées dans les pastilles d'identification. */
+    public function initials(): string
+    {
+        $parts = preg_split('/\s+/', trim($this->name)) ?: [];
+
+        return mb_strtoupper(
+            mb_substr((string) ($parts[0] ?? ''), 0, 1).mb_substr((string) (end($parts) ?: ''), 0, 1)
+        );
+    }
 }
