@@ -37,11 +37,11 @@ const COPY: Record<
         subtitle: 'Quelques secondes suffisent : votre espace de gestion est prêt immédiatement.',
         panelTitle: 'Une exploitation, une équipe, un seul tableau de bord.',
         panelBody:
-            'Parcelles, stocks, activités, finances et consommation d’eau : tout est centralisé dès la création du compte, sans carte bancaire.',
+            'Parcelles, stocks, activités, finances et eau : tout est centralisé dès la création du compte, sans carte bancaire.',
     },
 };
 
-/** L'URL de la barre d'adresse est la source de vérité en cas de retour arrière. */
+/** L'URL de la barre d'adresse fait foi lors d'un retour navigateur. */
 function modeFromLocation(): AuthMode {
     return window.location.pathname.startsWith(MODE_META.register.path) ? 'register' : 'login';
 }
@@ -50,24 +50,25 @@ function modeFromLocation(): AuthMode {
  * Écran d'authentification unique : connexion et inscription sur la même page,
  * basculées côté client.
  *
- * Le mode initial vient du serveur (`data-mode` de la vue Blade), la bascule
- * ensuite remplace l'URL par `history.pushState` — `/login` et `/register`
- * restent donc partageables, et le retour navigateur rétablit le bon mode.
+ * Le mode initial vient du serveur (`data-mode` de la vue Blade) ; la bascule
+ * remplace ensuite l'URL par `history.pushState`. `/login` et `/register`
+ * restent partageables, et le retour navigateur rétablit le bon mode.
  */
 export function AuthSwitcher({ login, register, defaultMode = 'login' }: AuthSwitcherProps) {
     const [mode, setMode] = useState<AuthMode>(defaultMode);
+
+    // Sens de la bascule : le formulaire entre par le côté opposé à sa source.
     const [forward, setForward] = useState(true);
 
-    // Le nom de l'application est le suffixe du titre rendu par Blade.
+    // Suffixe du titre rendu par Blade (« Connexion — AgriWater »).
     const appName = useRef(document.title.split('—').slice(1).join('—').trim() || 'AgriWater');
 
     const switchTo = useCallback(
         (next: AuthMode, { push = true }: { push?: boolean } = {}) => {
-            setMode((current) => {
-                if (current === next) return current;
-                setForward(next === 'register');
-                return next;
-            });
+            if (next === mode) return;
+
+            setForward(next === 'register');
+            setMode(next);
 
             if (!push) return;
 
@@ -77,7 +78,7 @@ export function AuthSwitcher({ login, register, defaultMode = 'login' }: AuthSwi
             }
             document.title = `${meta.title} — ${appName.current}`;
         },
-        [],
+        [mode],
     );
 
     // Retour / avance du navigateur : on resynchronise l'écran sur l'URL.
@@ -90,11 +91,14 @@ export function AuthSwitcher({ login, register, defaultMode = 'login' }: AuthSwi
 
     const copy = COPY[mode];
     const isLogin = mode === 'login';
+    const enter = forward ? 'animate-slide-in-right' : 'animate-slide-in-left';
 
     return (
         <div className="grid min-h-screen bg-white lg:grid-cols-2">
-            {/* Panneau de marque : la même colonne dans les deux modes, seul le
-                message change — la bascule se joue sur le formulaire. */}
+            {/*
+                Panneau de marque : la colonne ne bouge pas d'un mode à l'autre,
+                seul son message change — la bascule se joue sur le formulaire.
+            */}
             <aside className="relative isolate hidden overflow-hidden bg-brand-900 p-10 text-white lg:flex lg:flex-col lg:justify-between">
                 <div aria-hidden="true" className="absolute inset-0 -z-10">
                     <div className="absolute inset-0 bg-gradient-to-br from-brand-800 via-brand-900 to-water-900" />
@@ -106,13 +110,8 @@ export function AuthSwitcher({ login, register, defaultMode = 'login' }: AuthSwi
                     <Logo inverted />
                 </a>
 
-                <div
-                    key={`panel-${mode}`}
-                    className={cn(
-                        'max-w-md animate-slide-in-right',
-                        !forward && 'animate-slide-in-left',
-                    )}
-                >
+                {/* La clé force le remontage : l'animation rejoue à chaque bascule. */}
+                <div key={`panel-${mode}`} className={cn('max-w-md', enter)}>
                     <p className="text-xs font-semibold uppercase tracking-[0.18em] text-brand-200">
                         Gestion agricole intelligente
                     </p>
@@ -136,31 +135,23 @@ export function AuthSwitcher({ login, register, defaultMode = 'login' }: AuthSwi
                         <span aria-hidden="true">←</span> Accueil
                     </a>
 
+                    <header className="mt-8 lg:mt-0" aria-live="polite">
+                        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-700">
+                            {copy.eyebrow}
+                        </p>
+                        <h1 className="mt-2 font-display text-3xl font-extrabold tracking-tight text-ink-900">
+                            {copy.title}
+                        </h1>
+                        <p className="mt-2 text-sm leading-relaxed text-ink-500">{copy.subtitle}</p>
+                    </header>
+
                     {/*
                         Une seule instance de formulaire à la fois : les deux
                         écrans partagent les mêmes `id` de champs, les monter
                         ensemble casserait le lien label ↔ input.
                     */}
-                    <div key={mode}>
-                        <header className="mt-8 lg:mt-0" aria-live="polite">
-                            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-700">
-                                {copy.eyebrow}
-                            </p>
-                            <h1 className="mt-2 font-display text-3xl font-extrabold tracking-tight text-ink-900">
-                                {copy.title}
-                            </h1>
-                            <p className="mt-2 text-sm leading-relaxed text-ink-500">{copy.subtitle}</p>
-                        </header>
-
-                        <div
-                            id="auth-form"
-                            className={cn(
-                                'mt-8 animate-slide-in-right',
-                                !forward && 'animate-slide-in-left',
-                            )}
-                        >
-                            {isLogin ? login : register}
-                        </div>
+                    <div key={mode} id="auth-form" className={cn('mt-8', enter)}>
+                        {isLogin ? login : register}
                     </div>
 
                     <div className="mt-8 text-center text-sm text-ink-500">
