@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\User;
 use Database\Seeders\AgriWaterDemoSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Tests\Support\AgriWaterSchema;
 use Tests\TestCase;
 
 /**
@@ -18,11 +19,20 @@ class DashboardTest extends TestCase
 
     private const RESPONSIBLE = 'responsable.tsinjo@agriwater.test';
 
-    private const AUTRE_EXPLOITATION = 'resp.vokatra@agriwater.test';
+    private const AUTRE_EXPLOITATION = 'responsable.vokatra@agriwater.test';
+
+    /** Le schéma doit exister avant que `RefreshDatabase` ne migre. */
+    protected function beforeRefreshingDatabase(): void
+    {
+        AgriWaterSchema::ensureExists();
+    }
 
     protected function setUp(): void
     {
         parent::setUp();
+
+        // Les assets sont compilés par Vite : hors de ce test, seul le HTML compte.
+        $this->withoutVite();
 
         $this->seed(AgriWaterDemoSeeder::class);
     }
@@ -89,5 +99,17 @@ class DashboardTest extends TestCase
             fn (array $point) => $point['consumption'] === 0.0 && $point['reference'] === null,
         );
         $this->assertSame([], $moisVides);
+    }
+
+    public function test_un_administrateur_sans_exploitation_reste_consultable(): void
+    {
+        // `users.farm_id` est nul pour un administrateur global : sans repli,
+        // la page ne pourrait pas choisir d'exploitation et resterait bloquée.
+        $this->actingAs(User::where('email', 'admin@agriwater.test')->firstOrFail());
+
+        $payload = $this->getJson('/dashboard/data')->assertOk()->json();
+
+        $this->assertNotEmpty($payload['farm']['id']);
+        $this->assertSame('Tsinjo Maitso', $payload['farm']['name']);
     }
 }

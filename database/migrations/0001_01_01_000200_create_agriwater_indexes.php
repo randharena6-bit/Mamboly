@@ -98,9 +98,10 @@ return new class extends Migration
 
         CREATE INDEX sessions_user_id_index        ON sessions (user_id);
 
-        CREATE INDEX jobs_queue_index              ON jobs (queue);
-
-        CREATE INDEX cache_expiration_index        ON cache (expiration);
+        -- `jobs.queue` et `cache.expiration` sont déjà indexés par les
+        -- migrations de Laravel (`->index()`), qui nomment l'index exactement
+        -- `jobs_queue_index` et `cache_expiration_index`. Les recréer ici
+        -- ferait échouer `migrate:fresh` sur un doublon.
         SQL);
     }
 
