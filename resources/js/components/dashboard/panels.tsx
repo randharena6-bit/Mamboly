@@ -302,20 +302,28 @@ export function StockTable({ rows }: { rows: StockRow[] }) {
 export function WaterSourceGauges({
     sources,
 }: {
-    sources: readonly { name: string; available: number; capacity: number; threshold: number; status: 'ok' | 'critique' }[];
+    sources: readonly {
+        name: string;
+        available: number;
+        capacity: number;
+        threshold: number;
+        unit?: string;
+        status: 'ok' | 'critique';
+    }[];
 }) {
     return (
         <ul className="space-y-3">
             {sources.map((source) => {
                 const ratio = Math.min((source.available / source.capacity) * 100, 100);
                 const critical = source.status === 'critique';
+                const unit = source.unit ?? 'L';
 
                 return (
                     <li key={source.name}>
                         <div className="flex items-baseline justify-between gap-2">
                             <p className="truncate text-xs font-semibold text-ink-800">{source.name}</p>
                             <p className="shrink-0 text-[0.6875rem] text-ink-500">
-                                {formatNumber(source.available)} / {formatNumber(source.capacity)} L
+                                {formatNumber(source.available)} / {formatNumber(source.capacity)} {unit}
                             </p>
                         </div>
 

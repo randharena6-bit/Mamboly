@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
+use App\Http\Controllers\DashboardController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -98,11 +99,18 @@ Route::post('/logout', [AuthenticatedSessionController::class, 'destroy'])
 |--------------------------------------------------------------------------
 */
 
-Route::view('/dashboard', 'stub', [
-    'title' => 'Tableau de bord',
-    'eyebrow' => 'Application',
-    'description' => 'Le tableau de bord AgriWater est détaillé sur la page d’accueil. Son accès réel nécessite l’authentification.',
-])->middleware('auth')->name('dashboard');
+Route::get('/dashboard', [DashboardController::class, 'show'])
+    ->middleware('auth')
+    ->name('dashboard');
+
+/*
+ * Ressource du tableau de bord. Elle est déclarée dans `web` et non dans `api`
+ * pour partager la session : l'îlot React lit les données de l'exploitation de
+ * l'utilisateur connecté, jamais celles d'une autre exploitation.
+ */
+Route::get('/dashboard/data', [DashboardController::class, 'data'])
+    ->middleware('auth')
+    ->name('dashboard.data');
 
 Route::view('/demo', 'stub', [
     'title' => 'Démonstration',

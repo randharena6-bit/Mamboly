@@ -1,5 +1,5 @@
 import { CircleAlert, Inbox, RefreshCw } from 'lucide-react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ComponentType, CSSProperties, ReactNode } from 'react';
 
 import { cn } from '../../lib/cn';
 import { Button } from '../ui/button';
@@ -128,11 +128,14 @@ export function EmptyState({
 export function ErrorState({
     title = 'Impossible de charger les données',
     description = 'Vérifiez votre connexion, puis réessayez.',
+    icon: Icon = CircleAlert,
     onRetry,
     className,
 }: {
     title?: string;
     description?: string;
+    /** Icône d'état ; par défaut l'alerte, qui convient à un échec de chargement. */
+    icon?: ComponentType<{ className?: string }>;
     onRetry?: () => void;
     className?: string;
 }) {
@@ -145,7 +148,7 @@ export function ErrorState({
             )}
         >
             <span className="grid size-11 place-items-center rounded-xl bg-white text-harvest-700 shadow-soft ring-1 ring-harvest-200">
-                <CircleAlert aria-hidden="true" className="size-5" />
+                <Icon aria-hidden="true" className="size-5" />
             </span>
             <p className="mt-3 text-sm font-semibold text-ink-900">{title}</p>
             <p className="mt-1 max-w-64 text-xs leading-relaxed text-ink-600">{description}</p>

@@ -55,18 +55,24 @@ function ChartTooltip({
 
     const total = payload.reduce((sum, entry) => sum + (typeof entry.value === 'number' ? entry.value : 0), 0);
 
-    const rows = payload.map((entry) => {
-        const key = String(entry.dataKey ?? entry.name ?? '');
-        const value = typeof entry.value === 'number' ? entry.value : 0;
+    const rows = payload
+        // Une série absente sur un mois (`null`) n'est pas une mesure à zéro :
+        // elle ne doit pas apparaître dans l'infobulle.
+        .filter((entry) => typeof entry.value === 'number')
+        .map((entry) => {
+            const key = String(entry.dataKey ?? entry.name ?? '');
+            const value = entry.value as number;
 
-        return {
-            name: String(entry.name ?? key),
-            value: formatValue(key, value),
-            color: (entry.color as string) ?? (entry.fill as string) ?? '#2E7D32',
-            muted: mutedKeys.includes(key),
-            share: withShare && total > 0 ? `${Math.round((value / total) * 100)} %` : undefined,
-        };
-    });
+            return {
+                name: String(entry.name ?? key),
+                value: formatValue(key, value),
+                color: (entry.color as string) ?? (entry.fill as string) ?? '#2E7D32',
+                muted: mutedKeys.includes(key),
+                share: withShare && total > 0 ? `${Math.round((value / total) * 100)} %` : undefined,
+            };
+        });
+
+    if (rows.length === 0) return null;
 
     return (
         <div className="pointer-events-none min-w-44 rounded-xl border border-ink-100 bg-white/95 px-3 py-2 shadow-lift backdrop-blur-sm">
@@ -165,7 +171,8 @@ const axisTick = { fontSize: 10, fill: '#8a928d' } as const;
 /* Consommation d'eau (aire)                                           */
 /* ------------------------------------------------------------------ */
 
-type WaterPoint = { month: string; consommation: number; reference: number };
+/** `reference` vaut `null` quand aucune donnée N-1 n'existe pour ce mois. */
+export type WaterPoint = { month: string; consommation: number; reference: number | null };
 
 export function WaterAreaChart({
     data,
@@ -237,7 +244,7 @@ export function WaterAreaChart({
 /* Dépenses / recettes (barres groupées)                               */
 /* ------------------------------------------------------------------ */
 
-type CashflowPoint = { month: string; depenses: number; recettes: number };
+export type CashflowPoint = { month: string; depenses: number; recettes: number };
 
 export function CashflowBarChart({
     data,
@@ -288,7 +295,7 @@ export function CashflowBarChart({
 /* Répartition des dépenses (anneau)                                    */
 /* ------------------------------------------------------------------ */
 
-type Slice = { name: string; value: number };
+export type Slice = { name: string; value: number };
 
 const donutColors = ['#2E7D32', '#0288D1', '#66BB6A', '#4FC3F7', '#F59E0B', '#81C784'];
 

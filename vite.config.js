@@ -11,6 +11,7 @@ export default defineConfig({
                 'resources/js/app.js',
                 'resources/js/landing.tsx',
                 'resources/js/auth-switch.tsx',
+                'resources/js/dashboard.tsx',
             ],
             refresh: true,
         }),

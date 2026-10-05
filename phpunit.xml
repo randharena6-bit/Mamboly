@@ -23,9 +23,15 @@
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
-        <env name="DB_CONNECTION" value="sqlite"/>
-        <env name="DB_DATABASE" value=":memory:"/>
-        <env name="DB_URL" value=""/>
+        <!--
+            Le schéma AgriWater repose sur les ENUM natifs, les domaines, les
+            déclencheurs et les vues de PostgreSQL : les migrations refusent
+            toute autre base. Les tests s'exécutent donc sur une base dédiée,
+            distincte de celle de développement.
+        -->
+        <env name="DB_CONNECTION" value="pgsql"/>
+        <env name="DB_DATABASE" value="agriwater_test"/>
+        <env name="DB_SEARCH_PATH" value="agriwater,public"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>

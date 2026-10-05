@@ -129,7 +129,6 @@ export type StockRow = {
     threshold: number;
     unitPrice: number;
     supplier: string;
-    status: 'ok' | 'bas' | 'critique';
 };
 
 export const stockRows: StockRow[] = [
@@ -142,7 +141,6 @@ export const stockRows: StockRow[] = [
         threshold: 5,
         unitPrice: 45000,
         supplier: 'Agri-Sème',
-        status: 'ok',
     },
     {
         id: 2,
@@ -153,7 +151,6 @@ export const stockRows: StockRow[] = [
         threshold: 20,
         unitPrice: 3500,
         supplier: 'Fertil Madagascar',
-        status: 'ok',
     },
     {
         id: 3,
@@ -164,7 +161,6 @@ export const stockRows: StockRow[] = [
         threshold: 3,
         unitPrice: 28000,
         supplier: 'PhytoProtect',
-        status: 'critique',
     },
     {
         id: 4,
@@ -175,7 +171,6 @@ export const stockRows: StockRow[] = [
         threshold: 4,
         unitPrice: 28000,
         supplier: 'Agri-Sème',
-        status: 'ok',
     },
     {
         id: 5,
@@ -186,7 +181,6 @@ export const stockRows: StockRow[] = [
         threshold: 50,
         unitPrice: 800,
         supplier: 'Ferme locale',
-        status: 'ok',
     },
 ];
 

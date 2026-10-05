@@ -2,6 +2,7 @@ import { ArrowRight, Eye } from 'lucide-react';
 import { useState } from 'react';
 
 import { routes } from '../../config/site';
+import { demoDashboardView } from '../../data/dashboard';
 import { DashboardFull, type DashboardViewState } from '../dashboard/dashboard-full';
 import { cn } from '../../lib/cn';
 import { Button } from '../ui/button';
@@ -69,7 +70,7 @@ export function DashboardTour() {
                     </div>
 
                     <div className="relative">
-                        <DashboardFull view={view} />
+                        <DashboardFull data={demoDashboardView} view={view} />
                     </div>
                 </div>
             </Reveal>
