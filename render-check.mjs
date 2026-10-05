@@ -21,6 +21,9 @@ const session = [setCookie, ...auth.headers.getSetCookie().map((c) => c.split(';
 
 const page = await fetch(`${base}/dashboard`, { headers: { Cookie: session } });
 const html = await page.text();
+console.log('login status:', auth.status, '| redirect:', auth.headers.get('location'));
+console.log('dashboard status:', page.status, '| location:', page.headers.get('location'));
+console.log('body head:', html.slice(0, 300));
 const endpoint = html.match(/data-url="([^"]+)"/)[1];
 const assets = [...html.matchAll(/\/build\/assets\/[^"]+\.js/g)].map((m) => m[0]);
 

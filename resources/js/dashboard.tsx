@@ -1,6 +1,7 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { TooltipProvider } from './components/ui/tooltip';
 import { DashboardPage } from './pages/dashboard-page';
 import './bootstrap';
 
@@ -16,7 +17,10 @@ const container = document.getElementById('agriwater-dashboard');
 if (container?.dataset.url) {
     createRoot(container).render(
         <StrictMode>
-            <DashboardPage endpoint={container.dataset.url} />
+            {/* Les infobulles des tuiles et de l'en-tête l'exigent. */}
+            <TooltipProvider>
+                <DashboardPage endpoint={container.dataset.url} />
+            </TooltipProvider>
         </StrictMode>,
     );
 }
