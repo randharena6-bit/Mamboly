@@ -179,30 +179,26 @@ class FarmService
                 ->orderByDesc('start_date')
                 ->limit(self::CAMPAIGN_ROWS)
                 ->get()
-                ->map(fn ($campaign) => [
-                    'id' => $campaign->id,
-                    'name' => $campaign->name,
-                    'code' => $campaign->code,
-                    'status' => $campaign->status,
-                    'cropName' => $campaign->crop?->name,
-                    'cropCategory' => $campaign->crop?->category,
-                    'plotCode' => $campaign->plot?->code,
-                    'plotName' => $campaign->plot?->name,
-                    // `campaigns.area` est en m² (colonne `surface_m2`, sans
-                    // colonne d'unité) : la valeur est renvoyée telle quelle.
-                    'area' => (float) $campaign->area,
-                    'startDate' => $campaign->start_date->toIso8601String(),
-                    'expectedEndDate' => $campaign->expected_end_date->toIso8601String(),
-                ])
+                ->map(function ($campaign) {
+                    return [
+                        'id' => $campaign->id,
+                        'name' => $campaign->name,
+                        'code' => $campaign->code,
+                        'status' => $campaign->status,
+                        'cropName' => $campaign->crop?->name,
+                        'cropCategory' => $campaign->crop?->category,
+                        'plotCode' => $campaign->plot?->code,
+                        'plotName' => $campaign->plot?->name,
+                        // `campaigns.area` est en m² (colonne `surface_m2`, sans
+                        // colonne d'unité) : la valeur est renvoyée telle quelle.
+                        'area' => (float) $campaign->area,
+                        'startDate' => $campaign->start_date?->toIso8601String(),
+                        'expectedEndDate' => $campaign->expected_end_date?->toIso8601String(),
+                    ];
+                })
                 ->all(),
-        ];
+        ]);
     }
-
-    /**
-     * Équipe de l'exploitation, le responsable en tête.
-     *
-     * @return array<string, mixed>
-     */
     private function team(Farm $farm): array
     {
         $members = $farm->users()
