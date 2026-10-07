@@ -82,12 +82,20 @@
     --animate-float-slow: float-slow 9s ease-in-out infinite;
     --animate-float: float 6s ease-in-out infinite;
     --animate-drift: drift 18s ease-in-out infinite alternate;
+    --animate-drift-soft: drift-soft 18s ease-in-out infinite alternate;
     --animate-shimmer: shimmer 3.2s linear infinite;
     --animate-dash: dash 1.6s linear infinite;
 
     /* Bascule connexion / inscription */
     --animate-slide-in-right: slide-in-right 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
     --animate-slide-in-left: slide-in-left 340ms cubic-bezier(0.22, 1, 0.36, 1) both;
+
+    /* Textes des écrans d'authentification */
+    --animate-fade-in-up: fade-in-up 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    --animate-pop-in: pop-in 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+
+    /* Repère du défilé du panneau : durée identique à l'intervalle des messages */
+    --animate-dot-progress: dot-progress 5000ms linear both;
 }
 
 @keyframes float-slow {
@@ -116,6 +124,20 @@
     }
     100% {
         transform: translate3d(24px, -32px, 0) scale(1.12);
+    }
+}
+
+/*
+ | Dérive de la photo de fond : translation seule, sans mise à l'échelle,
+ | pour ne pas échantillonner l'image deux fois (elle reste nette).
+ | La photo déborde de 32 px (`-inset-8`) pour masquer les bords.
+ */
+@keyframes drift-soft {
+    0% {
+        transform: translate3d(0, 0, 0);
+    }
+    100% {
+        transform: translate3d(24px, -32px, 0);
     }
 }
 
@@ -159,6 +181,40 @@
     to {
         opacity: 1;
         transform: translate3d(0, 0, 0);
+    }
+}
+
+/* Montée en douceur : sert aux textes des écrans connexion / inscription. */
+@keyframes fade-in-up {
+    from {
+        opacity: 0;
+        transform: translate3d(0, 0.9rem, 0);
+    }
+    to {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+    }
+}
+
+/* Révélation élastique : titres, bandeau d'erreur, bouton de bascule. */
+@keyframes pop-in {
+    from {
+        opacity: 0;
+        transform: scale(0.94);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Le repère actif du panneau s'allonge pendant les 5 s du message affiché. */
+@keyframes dot-progress {
+    from {
+        width: 0.5rem;
+    }
+    to {
+        width: 1.5rem;
     }
 }
 
@@ -213,5 +269,78 @@
         background-clip: text;
         -webkit-background-clip: text;
         color: transparent;
+    }
+
+    /* Photo de fond du panneau de marque (écrans connexion / inscription) */
+    .auth-panel-photo {
+        background-image: url('../images/images-hd.jpeg');
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+    }
+
+    /*
+     | Accueil : photo plein cadre en fond de la section héro. Le voile clair
+     | (appliqué par-dessus dans le composant) garde les textes lisibles.
+     */
+    .hero-photo {
+        background-image: url('../images/images2-hd.jpeg');
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        /* Photo plus lumineuse et plus nette sous le voile sombre. */
+        filter: brightness(1.12) contrast(1.06) saturate(1.05);
+    }
+
+    /*
+     | Écrans connexion / inscription : textes agrandis et entrée en cascade.
+     | Les règles sont bornées à `#auth-form` pour ne pas toucher le reste de
+     | l'application ; les délais rejouent à chaque bascule car le conteneur
+     | est remonté via sa clé React.
+     */
+    #auth-form form label {
+        font-size: 1rem;
+        line-height: 1.5;
+    }
+
+    #auth-form form input:not([type='checkbox']) {
+        font-size: 1.0625rem;
+    }
+
+    #auth-form form p {
+        font-size: 0.875rem;
+    }
+
+    #auth-form form > * {
+        animation: fade-in-up 460ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    #auth-form form > *:nth-child(1) {
+        animation-delay: 180ms;
+    }
+    #auth-form form > *:nth-child(2) {
+        animation-delay: 230ms;
+    }
+    #auth-form form > *:nth-child(3) {
+        animation-delay: 280ms;
+    }
+    #auth-form form > *:nth-child(4) {
+        animation-delay: 330ms;
+    }
+    #auth-form form > *:nth-child(5) {
+        animation-delay: 380ms;
+    }
+    #auth-form form > *:nth-child(6) {
+        animation-delay: 430ms;
+    }
+    #auth-form form > *:nth-child(7) {
+        animation-delay: 480ms;
+    }
+    #auth-form form > *:nth-child(8) {
+        animation-delay: 530ms;
+    }
+
+    #auth-form [role='alert'] {
+        animation: pop-in 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
     }
 }

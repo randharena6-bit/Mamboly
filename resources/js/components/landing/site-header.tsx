@@ -16,6 +16,9 @@ export function SiteHeader() {
     const scrolled = useScrolled(20);
     const [open, setOpen] = useState(false);
     const panelId = useId();
+    // Barre transparente au sommet de la page : le texte passe en blanc
+    // pour rester lisible sur le héros sombre.
+    const atTop = !scrolled && !open;
 
     // Verrouille le défilement du document quand le menu mobile est ouvert.
     useEffect(() => {
@@ -50,7 +53,7 @@ export function SiteHeader() {
                     className="rounded-xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-700"
                     aria-label="AgriWater, retour à l’accueil"
                 >
-                    <Logo />
+                    <Logo inverted={atTop} />
                 </a>
 
                 <ul className="ml-4 hidden items-center gap-1 lg:flex">
@@ -58,7 +61,12 @@ export function SiteHeader() {
                         <li key={link.label}>
                             <a
                                 href={link.href}
-                                className="group relative inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium text-ink-600 transition-colors duration-200 hover:text-brand-700"
+                                className={cn(
+                                    'group relative inline-flex h-9 items-center rounded-lg px-3.5 text-sm font-medium transition-colors duration-200',
+                                    atTop
+                                        ? 'text-white hover:text-white/70'
+                                        : 'text-ink-600 hover:text-brand-700',
+                                )}
                             >
                                 {link.label}
                                 <span
@@ -71,7 +79,7 @@ export function SiteHeader() {
                 </ul>
 
                 <div className="ml-auto hidden items-center gap-2.5 lg:flex">
-                    <Button asChild variant="ghost" size="sm">
+                    <Button asChild variant={atTop ? 'onDark' : 'ghost'} size="sm">
                         <a href={routes.login}>Se connecter</a>
                     </Button>
                     <Button asChild size="sm">
@@ -80,7 +88,7 @@ export function SiteHeader() {
                 </div>
 
                 <Button
-                    variant="outline"
+                    variant={atTop ? 'onDark' : 'outline'}
                     size="iconSm"
                     className="ml-auto lg:hidden"
                     aria-expanded={open}
