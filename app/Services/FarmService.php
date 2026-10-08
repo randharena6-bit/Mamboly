@@ -23,6 +23,19 @@ class FarmService
 {
     private const CAMPAIGN_ROWS = 6;
 
+    /** Activités récentes affichées dans l'onglet « Activités ». */
+    private const ACTIVITY_ROWS = 8;
+
+    /**
+     * Plafond de la liste d'alertes de la fiche : les alertes non lues sont
+     * toujours en tête, et « Tout marquer lu » agit côté serveur sur la
+     * totalité de l'exploitation, jamais sur cette sélection.
+     */
+    private const ALERT_ROWS = 100;
+
+    /** Humidité du sol (en %) sous laquelle une parcelle est considérée à risque. */
+    private const SOIL_MOISTURE_RISK = 25.0;
+
     /**
      * Payload de la page `/exploitations` pour l'utilisateur connecté.
      *
@@ -37,6 +50,10 @@ class FarmService
                 'initials' => $user->initials(),
             ],
             'generatedAt' => Carbon::now()->toIso8601String(),
+            // Décision d'interface portée par le serveur : la création et la
+            // suppression d'une exploitation sont réservées à l'administrateur
+            // global, jamais décidées côté client (RM-01).
+            'canManage' => $user->isAdministrator(),
         ];
 
         if ($user->isAdministrator()) {
@@ -74,6 +91,7 @@ class FarmService
                 'initials' => $user->initials(),
             ],
             'generatedAt' => Carbon::now()->toIso8601String(),
+            'canManage' => $user->isAdministrator(),
             'farm' => $this->detail($farm),
         ];
     }
@@ -159,46 +177,269 @@ class FarmService
     }
 
     /**
-     * Fiche complète : la ligne de liste augmentée de l'équipe et des campagnes
-     * en cours, ce qui distingue une exploitation réellement suivie d'une
-     * exploitation déclarée mais vide.
+     * Fiche complète : la ligne de liste augmentée de l'équipe, des campagnes
+     * en cours, des parcelles, des stocks, de l'eau, des alertes détaillées et
+     * des activités récentes — ce qui distingue une exploitation réellement
+     * suivie d'une exploitation déclarée mais vide.
      *
      * @return array<string, mixed>
      */
     private function detail(Farm $farm): array
     {
+        $plots = $this->plots($farm);
+        $waterSources = $this->waterSources($farm);
+
         // `array_merge` et non `+` : l'union de tableaux PHP laisse gagner la
         // clé de gauche, ce qui conserverait le `team` résumé sans ses membres.
         return array_merge($this->summary($farm), [
             'team' => $this->team($farm),
             'plotStatuses' => $this->plotStatuses($farm),
-            'campaigns' => $farm->campaigns()
-                ->with(['crop:id,name,category', 'plot:id,code,name'])
-                ->whereIn('status', ['active', 'planifiee', 'suspendue'])
-                ->orderByRaw("CASE status WHEN 'active' THEN 0 WHEN 'planifiee' THEN 1 ELSE 2 END")
-                ->orderByDesc('start_date')
-                ->limit(self::CAMPAIGN_ROWS)
-                ->get()
-                ->map(function ($campaign) {
-                    return [
+            'campaigns' => $this->campaigns($farm),
+            'plots' => $plots,
+            'plotsAtRisk' => count(array_filter($plots, fn (array $plot) => $plot['isAtRisk'])),
+            'criticalInputs' => $this->criticalInputs($farm),
+            'waterSources' => $waterSources,
+            'waterSummary' => $this->waterSummary($waterSources),
+            'alerts' => $this->alerts($farm),
+            'activities' => $this->activities($farm),
+        ]);
+    }
+
+    /**
+     * Parcelles de l'exploitation, chacune accompagnée de sa campagne active
+     * lorsqu'elle en a une : une parcelle « en culture » sans campagne ouverte
+     * est un signe de saisie incomplète.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function plots(Farm $farm): array
+    {
+        $activeCampaigns = $farm->campaigns()
+            ->where('status', 'active')
+            ->orderByDesc('start_date')
+            ->get()
+            ->groupBy('plot_id');
+
+        return $farm->plots()
+            ->orderBy('code')
+            ->get()
+            ->map(function ($plot) use ($activeCampaigns) {
+                $campaign = $activeCampaigns->get($plot->id)->first();
+                $moisture = $plot->soil_moisture;
+
+                return [
+                    'id' => $plot->id,
+                    'code' => $plot->code,
+                    'name' => $plot->name,
+                    'location' => $plot->location,
+                    'soilType' => $plot->soil_type,
+                    'status' => $plot->status,
+                    'area' => (float) $plot->area,
+                    'areaUnit' => $plot->area_unit,
+                    // Surface normalisée : le tableau mélange m² et hectares.
+                    'areaHa' => round($plot->areaInHectares(), 3),
+                    'soilMoisture' => $moisture === null ? null : (float) $moisture,
+                    'manualPriority' => $plot->manual_priority,
+                    'isAtRisk' => $plot->manual_priority === 'critique'
+                        || ($moisture !== null && (float) $moisture < self::SOIL_MOISTURE_RISK),
+                    'activeCampaign' => $campaign === null ? null : [
                         'id' => $campaign->id,
                         'name' => $campaign->name,
                         'code' => $campaign->code,
-                        'status' => $campaign->status,
-                        'cropName' => $campaign->crop?->name,
-                        'cropCategory' => $campaign->crop?->category,
-                        'plotCode' => $campaign->plot?->code,
-                        'plotName' => $campaign->plot?->name,
-                        // `campaigns.area` est en m² (colonne `surface_m2`, sans
-                        // colonne d'unité) : la valeur est renvoyée telle quelle.
-                        'area' => (float) $campaign->area,
                         'startDate' => $campaign->start_date?->toIso8601String(),
-                        'expectedEndDate' => $campaign->expected_end_date?->toIso8601String(),
-                    ];
-                })
-                ->all(),
-        ]);
+                    ],
+                ];
+            })
+            ->all();
     }
+
+    /**
+     * Campagnes en cours, planifiées ou suspendues : les campagnes terminées
+     * et annulées restent consultables ailleurs, elles n'occupent pas la fiche.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function campaigns(Farm $farm): array
+    {
+        return $farm->campaigns()
+            ->with(['crop:id,name,category', 'plot:id,code,name'])
+            ->whereIn('status', ['active', 'planifiee', 'suspendue'])
+            ->orderByRaw("CASE status WHEN 'active' THEN 0 WHEN 'planifiee' THEN 1 ELSE 2 END")
+            ->orderByDesc('start_date')
+            ->limit(self::CAMPAIGN_ROWS)
+            ->get()
+            ->map(function ($campaign) {
+                return [
+                    'id' => $campaign->id,
+                    'name' => $campaign->name,
+                    'code' => $campaign->code,
+                    'status' => $campaign->status,
+                    'cropName' => $campaign->crop?->name,
+                    'cropCategory' => $campaign->crop?->category,
+                    'plotCode' => $campaign->plot?->code,
+                    'plotName' => $campaign->plot?->name,
+                    // `campaigns.area` est en m² (colonne `surface_m2`, sans
+                    // colonne d'unité) : la valeur est renvoyée telle quelle.
+                    'area' => (float) $campaign->area,
+                    'startDate' => $campaign->start_date?->toIso8601String(),
+                    'expectedEndDate' => $campaign->expected_end_date?->toIso8601String(),
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * Intrants sous le seuil minimal : `available_quantity < minimum_threshold`.
+     *
+     * La valeur de chaque ligne (`quantity * unit_price`) permet d'estimer
+     * immédiatement le coût du réapprovisionnement.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function criticalInputs(Farm $farm): array
+    {
+        return $farm->inputs()
+            ->whereColumn('available_quantity', '<', 'minimum_threshold')
+            ->orderByRaw('available_quantity / NULLIF(minimum_threshold, 0) ASC')
+            ->orderBy('name')
+            ->get()
+            ->map(fn ($input) => [
+                'id' => $input->id,
+                'name' => $input->name,
+                'category' => $input->category,
+                'unit' => $input->unit,
+                'quantity' => (float) $input->available_quantity,
+                'threshold' => (float) $input->minimum_threshold,
+                'unitPrice' => (float) $input->unit_price,
+                'value' => $input->stockValue(),
+                'supplier' => $input->supplier,
+            ])
+            ->all();
+    }
+
+    /**
+     * Ressources en eau, la plus basse d'abord, avec taux de remplissage et
+     * position par rapport au seuil critique.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function waterSources(Farm $farm): array
+    {
+        return $farm->waterSources()
+            ->orderByRaw('available_quantity / NULLIF(capacity, 0) ASC')
+            ->orderBy('name')
+            ->get()
+            ->map(fn ($source) => [
+                'id' => $source->id,
+                'name' => $source->name,
+                'type' => $source->type,
+                'location' => $source->location,
+                'status' => $source->status,
+                'unit' => $source->unit,
+                'available' => (float) $source->available_quantity,
+                'capacity' => (float) $source->capacity,
+                'threshold' => (float) $source->critical_threshold,
+                'fillRatio' => round($source->fillRatio(), 1),
+                'isCritical' => $source->isBelowThreshold(),
+            ])
+            ->all();
+    }
+
+    /**
+     * Agrégats de la ressource en eau : les volumes de sources hétérogènes
+     * (litres, m³) sont ramenés en litres, comme `metrics.waterAvailable`.
+     *
+     * @param  list<array<string, mixed>>  $sources
+     * @return array<string, float|int>
+     */
+    private function waterSummary(array $sources): array
+    {
+        $toLitres = fn (array $source): float => $source['unit'] === 'm3'
+            ? $source['available'] * 1000
+            : $source['available'];
+        $capacityToLitres = fn (array $source): float => $source['unit'] === 'm3'
+            ? $source['capacity'] * 1000
+            : $source['capacity'];
+
+        $available = (float) array_sum(array_map($toLitres, $sources));
+        $capacity = (float) array_sum(array_map($capacityToLitres, $sources));
+
+        return [
+            'sourceCount' => count($sources),
+            'availableLitres' => $available,
+            'capacityLitres' => $capacity,
+            'fillRatio' => $capacity > 0.0 ? round(($available / $capacity) * 100, 1) : 0.0,
+            'criticalCount' => count(array_filter($sources, fn (array $source) => $source['isCritical'])),
+        ];
+    }
+
+    /**
+     * Alertes de l'exploitation, non lues d'abord, chacune rattachée à son
+     * objet (point d'eau, intrant ou campagne) : la cible est portée par le
+     * serveur, le client n'a pas à résoudre les identifiants.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function alerts(Farm $farm): array
+    {
+        return $farm->alerts()
+            ->with([
+                'waterSource:id,name',
+                'inputStock:id,name',
+                'campaign:id,name',
+            ])
+            ->orderBy('is_read')
+            ->orderByDesc('created_at')
+            ->limit(self::ALERT_ROWS)
+            ->get()
+            ->map(fn ($alert) => [
+                'id' => $alert->id,
+                'type' => $alert->type,
+                'severity' => $alert->severity,
+                'title' => $alert->title,
+                'message' => $alert->message,
+                'isRead' => $alert->is_read,
+                'createdAt' => $alert->created_at->toIso8601String(),
+                'target' => [
+                    'kind' => match (true) {
+                        $alert->water_source_id !== null => 'water_source',
+                        $alert->input_id !== null => 'input',
+                        default => 'campaign',
+                    },
+                    'label' => $alert->waterSource?->name
+                        ?? $alert->inputStock?->name
+                        ?? $alert->campaign?->name,
+                ],
+            ])
+            ->all();
+    }
+
+    /**
+     * Activités récentes de l'exploitation, les plus récentes d'abord.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function activities(Farm $farm): array
+    {
+        return $farm->activities()
+            ->with(['plot:id,code,name', 'campaign:id,name'])
+            ->orderByDesc('activity_date')
+            ->orderByDesc('id')
+            ->limit(self::ACTIVITY_ROWS)
+            ->get()
+            ->map(fn ($activity) => [
+                'id' => $activity->id,
+                'type' => $activity->type,
+                'description' => $activity->description,
+                'cost' => $activity->cost,
+                'date' => $activity->activity_date->toIso8601String(),
+                'plotCode' => $activity->plot?->code,
+                'plotName' => $activity->plot?->name,
+                'campaignName' => $activity->campaign?->name,
+            ])
+            ->all();
+    }
+
     private function team(Farm $farm): array
     {
         $members = $farm->users()

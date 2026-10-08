@@ -67,4 +67,20 @@ class Alert extends Model
     {
         return $this->belongsTo(InputStock::class, 'input_id');
     }
+
+    /** @return BelongsTo<Campaign, $this> */
+    public function campaign(): BelongsTo
+    {
+        return $this->belongsTo(Campaign::class, 'campaign_id');
+    }
+
+    /** Marque l'alerte comme lue : `is_read` et `read_at` bougent ensemble (contrainte `alerts_read_check`). */
+    public function markAsRead(): void
+    {
+        if ($this->is_read) {
+            return;
+        }
+
+        $this->forceFill(['is_read' => true, 'read_at' => now()])->save();
+    }
 }

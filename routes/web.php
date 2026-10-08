@@ -130,10 +130,26 @@ Route::get('/dashboard/data', [DashboardController::class, 'data'])
 
 Route::middleware('auth')->group(function (): void {
     Route::get('/exploitations', [FarmController::class, 'index'])->name('exploitations.index');
+    Route::get('/exploitations/create', [FarmController::class, 'create'])->name('exploitations.create');
+    Route::post('/exploitations', [FarmController::class, 'store'])->name('exploitations.store');
     Route::get('/exploitations/data', [FarmController::class, 'data'])->name('exploitations.data');
 
     Route::get('/exploitations/{farm}', [FarmController::class, 'show'])->name('exploitations.show');
+    Route::get('/exploitations/{farm}/edit', [FarmController::class, 'edit'])->name('exploitations.edit');
+    Route::patch('/exploitations/{farm}', [FarmController::class, 'update'])->name('exploitations.update');
+    Route::put('/exploitations/{farm}', [FarmController::class, 'update'])->name('exploitations.update.put');
+    Route::delete('/exploitations/{farm}', [FarmController::class, 'destroy'])->name('exploitations.destroy');
     Route::get('/exploitations/{farm}/data', [FarmController::class, 'showData'])->name('exploitations.show.data');
+
+    /*
+     * État de lecture des alertes. Les segments littéraux (`alerts`) viennent
+     * après `{farm}` : l'exploitation reste le périmètre de la route, et
+     * `FarmPolicy` (RM-01) décide de l'accès, jamais l'identifiant d'alerte.
+     */
+    Route::post('/exploitations/{farm}/alerts/{alert}/read', [FarmController::class, 'markAlertRead'])
+        ->name('exploitations.alerts.read');
+    Route::post('/exploitations/{farm}/alerts/read-all', [FarmController::class, 'markAllAlertsRead'])
+        ->name('exploitations.alerts.read-all');
 });
 
 Route::view('/demo', 'stub', [

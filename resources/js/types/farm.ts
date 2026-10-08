@@ -96,6 +96,8 @@ export type FarmsOverviewPayload = {
     mode: 'list' | 'single';
     user: FarmUser;
     generatedAt: string;
+    /** Décision serveur : création et suppression réservées à l'administrateur. */
+    canManage?: boolean;
     totals?: FarmsTotals;
     farms?: FarmSummary[];
     farm?: FarmDetail | null;
@@ -105,5 +107,15 @@ export type FarmShowPayload = {
     mode: 'single';
     user: FarmUser;
     generatedAt: string;
+    canManage?: boolean;
     farm: FarmDetail;
+};
+
+/** Formulaire de création / d'édition d'une exploitation. */
+export type FarmFormValues = {
+    name: string;
+    location: string;
+    type: string;
+    total_area: string;
+    status: string;
 };
