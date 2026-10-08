@@ -224,7 +224,9 @@ class FarmService
             ->orderBy('code')
             ->get()
             ->map(function ($plot) use ($activeCampaigns) {
-                $campaign = $activeCampaigns->get($plot->id)->first();
+                // Une parcelle sans campagne active n'a pas de groupe : le
+                // `?->` évite `->first()` sur une collection inexistante.
+                $campaign = $activeCampaigns->get($plot->id)?->first();
                 $moisture = $plot->soil_moisture;
 
                 return [

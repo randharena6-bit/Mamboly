@@ -1,10 +1,12 @@
-import { AlertCircle, ArrowLeft, RefreshCw, Tractor, Users } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Pencil, RefreshCw, Tractor, Trash2, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 
 import { AppShell } from '../components/dashboard/app-shell';
 import { ErrorState } from '../components/landing/states';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { ConfirmDialog } from '../components/ui/confirm-dialog';
+import { goTo } from '../lib/forms';
 import type { FarmShowPayload } from '../types/farm';
 
 type LoadState =
@@ -14,6 +16,8 @@ type LoadState =
 
 export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmName?: string }) {
     const [state, setState] = useState<LoadState>({ status: 'loading' });
+    const [confirmDelete, setConfirmDelete] = useState(false);
+    const [deleting, setDeleting] = useState(false);
 
     const load = useCallback(
         async (signal: AbortSignal) => {
@@ -55,6 +59,37 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
         return () => controller.abort();
     }, [load]);
 
+    const handleDelete = async () => {
+        if (!(state.status === 'ready')) return;
+        setDeleting(true);
+
+        const token = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content');
+
+        try {
+            const response = await fetch(`/exploitations/${state.payload.farm.id}`, {
+                method: 'DELETE',
+                headers: {
+                    Accept: 'application/json',
+                    'X-CSRF-TOKEN': token ?? '',
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+            });
+
+            const payload = await response.json().catch(() => null);
+            if (!response.ok) {
+                setDeleting(false);
+                setConfirmDelete(false);
+                return;
+            }
+
+            goTo(payload?.redirect ?? '/exploitations');
+        } catch (error) {
+            setDeleting(false);
+            setConfirmDelete(false);
+        }
+    };
+
     const name = farmName ?? (state.status === 'ready' ? state.payload.farm.name : 'Exploitation');
 
     if (state.status === 'loading') {
@@ -62,14 +97,16 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
             <Frame>
                 <AppShell
                     activeNav="/exploitations"
-                    user={{ name: 'Chargement...', role: '', initials: 'AW' }}
+                    user={{ name: 'Chargement…', role: '', initials: 'AW' }}
                     title={name}
-                    subtitle="Chargement des données..."
+                    subtitle="Chargement des données…"
                     variant="app"
                 >
-                    <div className="rounded-2xl border border-ink-100 bg-white p-6 shadow-soft">
-                        <p className="text-sm text-ink-500">Chargement en cours...</p>
-                    </div>
+                    <Card>
+                        <CardContent className="py-10 text-center text-sm text-ink-500">
+                            Chargement en cours…
+                        </CardContent>
+                    </Card>
                 </AppShell>
             </Frame>
         );
@@ -100,6 +137,7 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
     const payload = state.payload;
     const farm = payload.farm;
     const user = payload.user;
+    const canManage = payload.canManage ?? false;
 
     return (
         <Frame>
@@ -111,36 +149,56 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
                 variant="app"
             >
                 <div className="space-y-4">
-                    <div>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                         <Button asChild variant="outline" size="sm">
                             <a href="/exploitations">
                                 <ArrowLeft aria-hidden="true" className="size-4" />
                                 Retour aux exploitations
                             </a>
                         </Button>
+
+                        {canManage && (
+                            <div className="flex items-center gap-2">
+                                <Button asChild variant="outline" size="sm">
+                                    <a href={`/exploitations/${farm.id}/edit`}>
+                                        <Pencil aria-hidden="true" className="size-4" />
+                                        Modifier
+                                    </a>
+                                </Button>
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => setConfirmDelete(true)}
+                                    className="bg-red-600 hover:bg-red-700"
+                                >
+                                    <Trash2 aria-hidden="true" className="size-4" />
+                                    Supprimer
+                                </Button>
+                            </div>
+                        )}
                     </div>
 
                     <Card>
                         <CardHeader>
                             <CardTitle className="flex items-center gap-2">
                                 <Tractor className="size-4 text-brand-600" />
-                                Détail de l’exploitation
+                                Détail de l'exploitation
                             </CardTitle>
                         </CardHeader>
-                        <CardContent className="grid gap-2 text-sm text-ink-600 sm:grid-cols-2">
+                        <CardContent className="grid gap-2 text-sm text-ink-600 sm:grid-cols-2 lg:grid-cols-3">
                             <p>Type : {farm.type ?? '—'}</p>
                             <p>Statut : {farm.status ?? '—'}</p>
                             <p>Superficie : {farm.totalArea != null ? `${farm.totalArea} ha` : '—'}</p>
                             <p>Parcelles : {farm.counts.plots} (en culture : {farm.counts.plotsInCrop})</p>
                             <p>Campagnes : {farm.counts.campaigns} (actives : {farm.counts.campaignsActive})</p>
-                            <p>Sources d’eau : {farm.counts.waterSources}</p>
+                            <p>Sources d'eau : {farm.counts.waterSources}</p>
                             <p>Valeur stock : {farm.metrics.stockValue.toLocaleString('fr-FR')} MGA</p>
                             <p>Dépenses (mois) : {farm.metrics.monthExpenses.toLocaleString('fr-FR')} MGA</p>
                             <p>Recettes (mois) : {farm.metrics.monthRevenues.toLocaleString('fr-FR')} MGA</p>
-                            <p>Eau disponible : {farm.metrics.waterAvailable.toLocaleString('fr-FR')} m³</p>
+                            <p>Eau disponible : {farm.metrics.waterAvailable.toLocaleString('fr-FR')} L</p>
                             <p>Alertes non lues : {farm.unreadAlerts}</p>
                             <p>Créée le : {farm.createdAt ? new Date(farm.createdAt).toLocaleDateString('fr-FR') : '—'}</p>
-                            <p>Dernière connexion équipe : {farm.lastLoginAt ? new Date(farm.lastLoginAt).toLocaleDateString('fr-FR') : '—'}</p>
                         </CardContent>
                     </Card>
 
@@ -193,6 +251,16 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
                     )}
                 </div>
             </AppShell>
+
+            <ConfirmDialog
+                open={confirmDelete}
+                title={`Supprimer « ${farm.name} »`}
+                description="Toutes les données de l'exploitation — parcelles, campagnes, stocks, eau, finances et alertes — seront définitivement supprimées. Cette action est irréversible."
+                confirmLabel="Supprimer"
+                busy={deleting}
+                onConfirm={handleDelete}
+                onCancel={() => setConfirmDelete(false)}
+            />
         </Frame>
     );
 }

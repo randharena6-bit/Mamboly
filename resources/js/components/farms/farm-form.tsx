@@ -174,7 +174,7 @@ export function FarmForm({
             <CardFooter className="mt-6 flex flex-wrap items-center gap-2 border-t border-ink-100 px-0 pt-5">
                 <Button type="submit" disabled={busy}>
                     <Save aria-hidden="true" className="size-4" />
-                    {busy ? 'Enregistrement…' : isEdit ? 'Enregistrer les modifications' : 'Créer l'exploitation'}
+                    {busy ? 'Enregistrement…' : isEdit ? 'Enregistrer les modifications' : "Créer l'exploitation"}
                 </Button>
                 <Button asChild type="button" variant="outline">
                     <a href={backUrl}>

@@ -66,7 +66,7 @@ class FarmController extends Controller
 
     public function show(Request $request, Farm $farm): View
     {
-        $this->authorize('view', $farm);
+        Gate::authorize('view', $farm);
 
         return view('exploitations.show', [
             'farm' => $farm,
@@ -76,14 +76,14 @@ class FarmController extends Controller
 
     public function showData(Request $request, Farm $farm): JsonResponse
     {
-        $this->authorize('view', $farm);
+        Gate::authorize('view', $farm);
 
         return response()->json($this->farms->detailFor($request->user(), $farm));
     }
 
     public function edit(Request $request, Farm $farm): View
     {
-        $this->authorize('update', $farm);
+        Gate::authorize('update', $farm);
 
         return view('exploitations.edit', [
             'farm' => $farm,
@@ -129,7 +129,7 @@ class FarmController extends Controller
      */
     public function markAlertRead(Request $request, Farm $farm, Alert $alert): JsonResponse
     {
-        $this->authorize('view', $farm);
+        Gate::authorize('view', $farm);
 
         abort_unless($alert->farm_id === $farm->id, 404);
 
@@ -147,7 +147,7 @@ class FarmController extends Controller
      */
     public function markAllAlertsRead(Request $request, Farm $farm): JsonResponse
     {
-        $this->authorize('view', $farm);
+        Gate::authorize('view', $farm);
 
         $farm->alerts()
             ->where('is_read', false)
