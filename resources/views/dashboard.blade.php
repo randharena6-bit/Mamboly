@@ -27,7 +27,7 @@
     <noscript>
         <div class="mx-auto max-w-3xl px-6 py-24 text-center">
             <h1 class="text-3xl font-bold text-ink-900">Tableau de bord</h1>
-            <p class="mt-4 text-ink-500">Cette page nécessite JavaScript pour charger les données de votre exploitation.</p>
+            <p class="mt-4 text-ink-500">La page se situe dans la function laravel d'où les autres ne sont pas autorisé à y acceder</p>
         </div>
     </noscript>
 </body>
