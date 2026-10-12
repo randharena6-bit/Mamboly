@@ -20,6 +20,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property float $area
  * @property string $area_unit
  * @property string|null $location
+ * @property float|null $latitude
+ * @property float|null $longitude
+ * @property array<int, mixed>|null $boundary
  * @property string|null $soil_type
  * @property string $status
  * @property string $manual_priority
@@ -36,6 +39,9 @@ class Plot extends Model
         'area',
         'area_unit',
         'location',
+        'latitude',
+        'longitude',
+        'boundary',
         'soil_type',
         'status',
         'manual_priority',
@@ -47,6 +53,9 @@ class Plot extends Model
         return [
             'area' => 'float',
             'soil_moisture' => 'float',
+            'latitude' => 'float',
+            'longitude' => 'float',
+            'boundary' => 'array',
         ];
     }
 
