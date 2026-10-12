@@ -39,6 +39,13 @@ const VARIANTS: Record<string, BadgeProps['variant']> = {
     brouillon: 'outline',
     terminee: 'outline',
     elevee: 'danger',
+    puits: 'water',
+    citerne: 'water',
+    bassin: 'water',
+    reservoir: 'water',
+    canal: 'water',
+    riviere: 'water',
+    reserve_pluie: 'water',
     // Catégories d'intrants
     semence: 'brand',
     engrais: 'success',
@@ -72,6 +79,13 @@ const LABELS: Record<string, string> = {
     critique: 'Critique',
     info: 'Information',
     avertissement: 'Avertissement',
+    puits: 'Puits',
+    citerne: 'Citerne',
+    bassin: 'Bassin',
+    reservoir: 'Réservoir',
+    canal: 'Canal',
+    riviere: 'Rivière',
+    reserve_pluie: 'Réserve de pluie',
 };
 
 export function humanize(value: string): string {

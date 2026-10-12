@@ -17,6 +17,7 @@ import type {
     OptionSourceKey,
     ResourceConfig,
     ResourceRow,
+    ResourceView,
     RowAction,
 } from '../../resources/types';
 import { ResourceForm } from './resource-form';
@@ -59,6 +60,7 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
     const [pendingAction, setPendingAction] = useState<{ action: RowAction<T>; row: T } | null>(null);
     const [dialog, setDialog] = useState<{ action: RowAction<T>; row: T } | null>(null);
     const [busyId, setBusyId] = useState<string | number | null>(null);
+    const [activeView, setActiveView] = useState<string>(config.views?.[0]?.id ?? 'list');
 
     const load = useCallback(async () => {
         setState((current) => (current === 'ready' ? current : 'loading'));
@@ -245,6 +247,9 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
                         onRefresh={() => void load()}
                         onCreate={() => setForm({ mode: 'create', row: null })}
                         searchPlaceholder={config.searchPlaceholder}
+                        views={config.views}
+                        activeView={activeView}
+                        onViewChange={setActiveView}
                     />
 
                     <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-ink-500">
@@ -431,6 +436,9 @@ function PageHeader({
     onRefresh,
     onCreate,
     searchPlaceholder,
+    views,
+    activeView,
+    onViewChange,
 }: {
     title: string;
     description: string;
@@ -441,6 +449,9 @@ function PageHeader({
     onRefresh: () => void;
     onCreate: () => void;
     searchPlaceholder?: string;
+    views?: ResourceView[];
+    activeView?: string;
+    onViewChange?: (id: string) => void;
 }) {
     return (
         <header className="rounded-2xl border border-ink-100 bg-white p-4 shadow-soft sm:p-5">
@@ -484,6 +495,22 @@ function PageHeader({
                     )}
                 </div>
             </div>
+            {views && views.length > 0 && (
+                <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-ink-100 pt-4">
+                    {views.map((v) => (
+                        <Button
+                            key={v.id}
+                            type="button"
+                            size="sm"
+                            variant={activeView === v.id ? 'primary' : 'outline'}
+                            disabled={v.disabled}
+                            onClick={() => onViewChange?.(v.id)}
+                        >
+                            {v.label}
+                        </Button>
+                    ))}
+                </div>
+            )}
         </header>
     );
 }

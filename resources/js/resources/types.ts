@@ -103,4 +103,12 @@ export type ResourceConfig<T extends ResourceRow = ResourceRow> = {
     searchPlaceholder?: string;
     emptyTitle?: string;
     emptyDescription?: string;
+    views?: ResourceView[];
+};
+
+export type ResourceView = {
+    id: string;
+    label: string;
+    render: (props: { rows: ResourceRow[]; context: any }) => ReactNode;
+    disabled?: boolean;
 };
