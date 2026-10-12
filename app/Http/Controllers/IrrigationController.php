@@ -3,9 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\RespondsWithJson;
+use App\Http\Controllers\Concerns\ServesModulePages;
 use App\Http\Requests\IrrigationRequest;
 use App\Models\Irrigation;
 use App\Services\IrrigationService;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -13,11 +15,16 @@ use Illuminate\Support\Facades\Gate;
 class IrrigationController extends Controller
 {
     use RespondsWithJson;
+    use ServesModulePages;
 
     public function __construct(private readonly IrrigationService $irrigations) {}
 
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): View|JsonResponse
     {
+        if (! $request->expectsJson()) {
+            return $this->moduleView('irrigations', 'Irrigations');
+        }
+
         $irrigations = Irrigation::query()
             ->with(['campaign:id,code,name', 'plot:id,code,name', 'waterSource:id,name,unit'])
             ->orderByDesc('performed_at')

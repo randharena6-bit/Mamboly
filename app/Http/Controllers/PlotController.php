@@ -3,17 +3,24 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\RespondsWithJson;
+use App\Http\Controllers\Concerns\ServesModulePages;
 use App\Http\Requests\PlotRequest;
 use App\Models\Plot;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class PlotController extends Controller
 {
     use RespondsWithJson;
+    use ServesModulePages;
 
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): View|JsonResponse
     {
+        if (! $request->expectsJson()) {
+            return $this->moduleView('plots', 'Parcelles');
+        }
+
         $plots = Plot::query()
             ->with('farm:id,name')
             ->orderBy('code')

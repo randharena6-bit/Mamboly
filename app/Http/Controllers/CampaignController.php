@@ -3,9 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\RespondsWithJson;
+use App\Http\Controllers\Concerns\ServesModulePages;
 use App\Http\Requests\CampaignRequest;
 use App\Models\Campaign;
 use App\Services\CampaignService;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -13,11 +15,16 @@ use Illuminate\Support\Facades\Gate;
 class CampaignController extends Controller
 {
     use RespondsWithJson;
+    use ServesModulePages;
 
     public function __construct(private readonly CampaignService $campaigns) {}
 
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): View|JsonResponse
     {
+        if (! $request->expectsJson()) {
+            return $this->moduleView('campaigns', 'Campagnes');
+        }
+
         $campaigns = Campaign::query()
             ->with(['plot:id,code,name', 'crop:id,name'])
             ->orderByDesc('start_date')

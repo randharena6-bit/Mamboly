@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\RespondsWithJson;
+use App\Http\Controllers\Concerns\ServesModulePages;
 use App\Http\Requests\UserRequest;
 use App\Models\User;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -12,9 +14,14 @@ use Illuminate\Support\Facades\Hash;
 class UserController extends Controller
 {
     use RespondsWithJson;
+    use ServesModulePages;
 
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): View|JsonResponse
     {
+        if (! $request->expectsJson()) {
+            return $this->moduleView('users', 'Comptes');
+        }
+
         $query = User::query()->with('role:id,name');
 
         // Un membre ne voit que les comptes de son exploitation ; l'administrateur

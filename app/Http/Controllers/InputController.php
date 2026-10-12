@@ -3,20 +3,27 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\RespondsWithJson;
+use App\Http\Controllers\Concerns\ServesModulePages;
 use App\Http\Requests\InputRequest;
 use App\Models\InputStock;
 use App\Services\StockService;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class InputController extends Controller
 {
     use RespondsWithJson;
+    use ServesModulePages;
 
     public function __construct(private readonly StockService $stocks) {}
 
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): View|JsonResponse
     {
+        if (! $request->expectsJson()) {
+            return $this->moduleView('inputs', 'Intrants & stocks');
+        }
+
         $inputs = InputStock::query()
             ->withCount('stockMovements')
             ->orderBy('name')

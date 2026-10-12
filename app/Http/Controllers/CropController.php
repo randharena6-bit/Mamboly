@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\RespondsWithJson;
+use App\Http\Controllers\Concerns\ServesModulePages;
 use App\Http\Requests\CropRequest;
 use App\Models\Crop;
+use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -12,9 +14,14 @@ use Illuminate\Support\Facades\Gate;
 class CropController extends Controller
 {
     use RespondsWithJson;
+    use ServesModulePages;
 
-    public function index(Request $request): JsonResponse
+    public function index(Request $request): View|JsonResponse
     {
+        if (! $request->expectsJson()) {
+            return $this->moduleView('crops', 'Cultures');
+        }
+
         $crops = Crop::query()
             ->orderBy('name')
             ->paginate($this->perPage($request));
