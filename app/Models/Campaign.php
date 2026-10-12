@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToFarm;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -25,6 +26,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Campaign extends Model
 {
+    use BelongsToFarm;
+
     protected $fillable = [
         'farm_id',
         'plot_id',
@@ -68,15 +71,57 @@ class Campaign extends Model
         return $this->belongsTo(Crop::class);
     }
 
+    /** @return BelongsTo<User, $this> */
+    public function manager(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'manager_id');
+    }
+
     /** @return HasMany<Irrigation, $this> */
     public function irrigations(): HasMany
     {
         return $this->hasMany(Irrigation::class);
     }
 
+    /** @return HasMany<IrrigationSchedule, $this> */
+    public function irrigationSchedules(): HasMany
+    {
+        return $this->hasMany(IrrigationSchedule::class);
+    }
+
+    /** @return HasMany<WaterMovement, $this> */
+    public function waterMovements(): HasMany
+    {
+        return $this->hasMany(WaterMovement::class);
+    }
+
+    /** @return HasMany<Harvest, $this> */
+    public function harvests(): HasMany
+    {
+        return $this->hasMany(Harvest::class);
+    }
+
     /** @return HasMany<Activity, $this> */
     public function activities(): HasMany
     {
         return $this->hasMany(Activity::class);
+    }
+
+    /** @return HasMany<Expense, $this> */
+    public function expenses(): HasMany
+    {
+        return $this->hasMany(Expense::class);
+    }
+
+    /** @return HasMany<Revenue, $this> */
+    public function revenues(): HasMany
+    {
+        return $this->hasMany(Revenue::class);
+    }
+
+    /** @return HasMany<StockMovement, $this> */
+    public function stockMovements(): HasMany
+    {
+        return $this->hasMany(StockMovement::class);
     }
 }

@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToFarm;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * Séance d'irrigation réalisée — cœur du module eau.
@@ -29,6 +31,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class Irrigation extends Model
 {
+    use BelongsToFarm;
+
     protected $fillable = [
         'farm_id',
         'campaign_id',
@@ -71,6 +75,30 @@ class Irrigation extends Model
     public function waterSource(): BelongsTo
     {
         return $this->belongsTo(WaterSource::class);
+    }
+
+    /** @return BelongsTo<Campaign, $this> */
+    public function campaign(): BelongsTo
+    {
+        return $this->belongsTo(Campaign::class);
+    }
+
+    /** @return BelongsTo<User, $this> */
+    public function performedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'performed_by');
+    }
+
+    /** @return BelongsTo<User, $this> */
+    public function validatedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'validated_by');
+    }
+
+    /** @return HasOne<WaterMovement, $this> */
+    public function waterMovement(): HasOne
+    {
+        return $this->hasOne(WaterMovement::class);
     }
 
     /** Quantité normalisée en litres : `m3` vaut 1 000 L. */

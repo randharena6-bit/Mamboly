@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToFarm;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -26,6 +27,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class InputStock extends Model
 {
+    use BelongsToFarm;
+
     /** La table s'appelle `inputs`, le nom de classe distingue le modèle métier. */
     protected $table = 'inputs';
 
@@ -60,6 +63,12 @@ class InputStock extends Model
     public function alerts(): HasMany
     {
         return $this->hasMany(Alert::class);
+    }
+
+    /** @return HasMany<StockMovement, $this> */
+    public function stockMovements(): HasMany
+    {
+        return $this->hasMany(StockMovement::class, 'input_id');
     }
 
     /** Valeur du stock restant, dans la devise de l'exploitation. */

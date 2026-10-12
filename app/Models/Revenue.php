@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToFarm;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -23,6 +24,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class Revenue extends Model
 {
+    use BelongsToFarm;
+
     protected $fillable = [
         'farm_id',
         'campaign_id',
@@ -56,5 +59,17 @@ class Revenue extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    /** @return BelongsTo<Campaign, $this> */
+    public function campaign(): BelongsTo
+    {
+        return $this->belongsTo(Campaign::class);
+    }
+
+    /** @return BelongsTo<Harvest, $this> */
+    public function harvest(): BelongsTo
+    {
+        return $this->belongsTo(Harvest::class);
     }
 }

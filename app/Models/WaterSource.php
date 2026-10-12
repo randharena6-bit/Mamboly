@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToFarm;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * Ressource en eau d'une exploitation : puits, citerne, bassin, réservoir.
@@ -25,6 +27,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class WaterSource extends Model
 {
+    use BelongsToFarm;
+
     protected $fillable = [
         'farm_id',
         'name',
@@ -50,6 +54,30 @@ class WaterSource extends Model
     public function farm(): BelongsTo
     {
         return $this->belongsTo(Farm::class);
+    }
+
+    /** @return HasMany<WaterMovement, $this> */
+    public function waterMovements(): HasMany
+    {
+        return $this->hasMany(WaterMovement::class);
+    }
+
+    /** @return HasMany<Irrigation, $this> */
+    public function irrigations(): HasMany
+    {
+        return $this->hasMany(Irrigation::class);
+    }
+
+    /** @return HasMany<IrrigationSchedule, $this> */
+    public function irrigationSchedules(): HasMany
+    {
+        return $this->hasMany(IrrigationSchedule::class);
+    }
+
+    /** @return HasMany<Alert, $this> */
+    public function alerts(): HasMany
+    {
+        return $this->hasMany(Alert::class);
     }
 
     /** Taux de remplissage, borné à 100 % pour l'affichage des jauges. */
