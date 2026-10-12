@@ -23,6 +23,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string $unit
  * @property float $critical_threshold
  * @property string|null $location
+ * @property float|null $latitude
+ * @property float|null $longitude
  * @property string $status
  */
 class WaterSource extends Model
@@ -38,6 +40,8 @@ class WaterSource extends Model
         'unit',
         'critical_threshold',
         'location',
+        'latitude',
+        'longitude',
         'status',
     ];
 
@@ -47,6 +51,8 @@ class WaterSource extends Model
             'capacity' => 'float',
             'available_quantity' => 'float',
             'critical_threshold' => 'float',
+            'latitude' => 'float',
+            'longitude' => 'float',
         ];
     }
 

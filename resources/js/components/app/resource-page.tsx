@@ -263,7 +263,7 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
                             )}
                         </p>
 
-                        {state === 'ready' && sorted.length > 0 && (
+                        {state === 'ready' && sorted.length > 0 && activeView === 'list' && (
                             <label className="flex items-center gap-2">
                                 <span className="text-xs text-ink-400">Lignes par page</span>
                                 <Select
@@ -307,7 +307,16 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
                         />
                     )}
 
-                    {state === 'ready' && sorted.length > 0 && (
+                    {state === 'ready' && sorted.length > 0 && activeView !== 'list' && (
+                        <div>
+                            {config.views?.find((view) => view.id === activeView)?.render({
+                                rows: sorted,
+                                context,
+                            })}
+                        </div>
+                    )}
+
+                    {state === 'ready' && sorted.length > 0 && activeView === 'list' && (
                         <>
                             <ResourceTable
                                 config={config}

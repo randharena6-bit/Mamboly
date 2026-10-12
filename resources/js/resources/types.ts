@@ -13,7 +13,8 @@ export type FieldType =
     | 'select'
     | 'textarea'
     | 'checkbox'
-    | 'password';
+    | 'password'
+    | 'json';
 
 /** Source de liste déroulante chargée à l'ouverture de la page. */
 export type OptionSourceKey =

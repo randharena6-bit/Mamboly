@@ -22,6 +22,7 @@ import {
 import type { ReactNode } from 'react';
 
 import { humanize, StatusBadge } from '../components/app/status-badge';
+import { Plots3DView, PlotsMapView } from '../components/plots/plots-views';
 import type { Option, ResourceConfig, ResourceRow } from './types';
 
 /* ------------------------------------------------------------------ */
@@ -261,6 +262,26 @@ export const resourceConfigs: Record<string, ResourceConfig> = {
                 max: 100,
                 step: '0.01',
                 hint: 'Entre 0 et 100.',
+            },
+            { name: 'latitude', label: 'Latitude', type: 'number', step: '0.000001', min: -90, max: 90, placeholder: 'e.g. -18.9167' },
+            { name: 'longitude', label: 'Longitude', type: 'number', step: '0.000001', min: -180, max: 180, placeholder: 'e.g. 47.5167' },
+            { name: 'boundary', label: 'Polygone (GeoJSON)', type: 'json', placeholder: '{"type":"Polygon","coordinates":[[[lng,lat],[lng,lat],...]]}' },
+        ],
+        views: [
+            {
+                id: 'list',
+                label: 'Liste',
+                render: () => null,
+            },
+            {
+                id: 'map',
+                label: 'Carte',
+                render: ({ rows }: { rows: ResourceRow[] }) => <PlotsMapView rows={rows} />,
+            },
+            {
+                id: '3d',
+                label: '3D',
+                render: ({ rows }: { rows: ResourceRow[] }) => <Plots3DView rows={rows} />,
             },
         ],
     },
@@ -718,6 +739,8 @@ export const resourceConfigs: Record<string, ResourceConfig> = {
                 hint: 'Une alerte est levée sous ce niveau.',
             },
             { name: 'location', label: 'Localisation' },
+            { name: 'latitude', label: 'Latitude', type: 'number', step: '0.000001', min: -90, max: 90, placeholder: 'e.g. -18.9167' },
+            { name: 'longitude', label: 'Longitude', type: 'number', step: '0.000001', min: -180, max: 180, placeholder: 'e.g. 47.5167' },
             { name: 'status', label: 'Statut', type: 'select', options: WATER_SOURCE_STATUS, default: 'active' },
         ],
     },

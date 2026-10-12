@@ -134,7 +134,7 @@ export function ResourceForm<T extends ResourceRow>({
                             required={required}
                             hint={field.hint}
                             error={error}
-                            className={field.full || field.type === 'textarea' ? 'sm:col-span-2' : undefined}
+                            className={field.full || field.type === 'textarea' || field.type === 'json' ? 'sm:col-span-2' : undefined}
                         >
                             {(describedBy) => {
                                 if (field.type === 'select') {
@@ -159,15 +159,20 @@ export function ResourceForm<T extends ResourceRow>({
                                     );
                                 }
 
-                                if (field.type === 'textarea') {
+                                if (field.type === 'textarea' || field.type === 'json') {
                                     return (
                                         <Textarea
                                             id={id}
                                             aria-describedby={describedBy}
                                             aria-invalid={error ? true : undefined}
                                             placeholder={field.placeholder}
+                                            className={field.type === 'json' ? 'font-mono text-xs' : undefined}
                                             {...register(field.name, {
                                                 required: required ? 'Ce champ est obligatoire.' : false,
+                                                validate:
+                                                    field.type === 'json'
+                                                        ? (value) => validateJson(String(value ?? ''))
+                                                        : undefined,
                                             })}
                                         />
                                     );
@@ -256,6 +261,8 @@ function normalizeForInput(type: string | undefined, value: unknown): unknown {
             return typeof value === 'string' ? value.slice(0, 16) : value;
         case 'date':
             return typeof value === 'string' ? value.slice(0, 10) : value;
+        case 'json':
+            return JSON.stringify(value, null, 2);
         default:
             return value;
     }
@@ -293,8 +300,31 @@ function toPayload(fields: ResourceConfig['fields'], values: FormValues): Record
             }
         }
 
+        if (field.type === 'json') {
+            try {
+                payload[field.name] = JSON.parse(String(value));
+            } catch {
+                payload[field.name] = null;
+            }
+
+            continue;
+        }
+
         payload[field.name] = value;
     }
 
     return payload;
+}
+
+/** Validation d'un champ JSON : vide accepté, sinon doit être un JSON valide. */
+function validateJson(value: string): string | true {
+    if (value.trim() === '') return true;
+
+    try {
+        JSON.parse(value);
+
+        return true;
+    } catch {
+        return 'Le contenu doit être un JSON valide.';
+    }
 }

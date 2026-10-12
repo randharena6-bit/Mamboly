@@ -27,6 +27,8 @@ class WaterSourceRequest extends ResourceRequest
             'unit' => ['nullable', Rule::enum(WaterUnit::class)],
             'critical_threshold' => ['nullable', 'numeric', 'min:0', 'lte:capacity'],
             'location' => ['nullable', 'string', 'max:255'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'status' => ['nullable', Rule::enum(WaterSourceStatus::class)],
         ];
     }
