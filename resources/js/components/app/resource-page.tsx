@@ -76,25 +76,8 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
     }, [endpoint]);
 
     useEffect(() => {
-        let cancelled = false;
-
-        void (async () => {
-            try {
-                const page = await http.get<Paginated<T>>(`${endpoint}?per_page=200`);
-                if (cancelled) return;
-                setRows(page.data);
-                setState('ready');
-            } catch {
-                if (cancelled) return;
-                setErrorMessage('Impossible de charger les données. Vérifiez votre connexion, puis réessayez.');
-                setState('error');
-            }
-        })();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [endpoint]);
+        void load();
+    }, [load]);
 
     const optionKeys = useMemo(() => {
         const keys = new Set<OptionSourceKey>();
@@ -231,17 +214,25 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
     };
 
     const user = context.user ?? { name: 'Utilisateur', role: null, initials: '—' };
+    const firstName = user.name.split(' ')[0] ?? user.name;
+    const farm = context.farm
+        ? {
+              name: context.farm.name,
+              location: context.farm.location ?? 'Localisation non renseignée',
+              type: context.farm.type ?? undefined,
+              totalArea: context.farm.totalArea,
+          }
+        : null;
 
     return (
         <div className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 lg:py-8">
             <AppShell
                 variant="app"
                 activeNav={config.endpoint}
-                farm={context.farm}
+                farm={farm}
                 user={{ name: user.name, role: user.role ?? 'Membre', initials: user.initials }}
                 unreadAlerts={context.unreadAlerts}
-                title={config.title}
-                subtitle={config.description}
+                title={`Bonjour, ${firstName}`}
             >
                 <div className="space-y-4">
                     <PageHeader
@@ -305,7 +296,7 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
                             }
                             action={
                                 query.trim() === ''
-                                    ? { label: `Ajouter : ${config.singular}`, onClick: () => setForm({ mode: 'create', row: null }) }
+                                    ? { label: `Ajouter ${config.singular}`, onClick: () => setForm({ mode: 'create', row: null }) }
                                     : undefined
                             }
                         />

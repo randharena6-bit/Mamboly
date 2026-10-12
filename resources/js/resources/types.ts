@@ -5,7 +5,15 @@ export type ResourceRow = Record<string, unknown>;
 
 export type Option = { value: string | number; label: string };
 
-export type FieldType = 'text' | 'number' | 'date' | 'datetime' | 'select' | 'textarea' | 'checkbox';
+export type FieldType =
+    | 'text'
+    | 'number'
+    | 'date'
+    | 'datetime'
+    | 'select'
+    | 'textarea'
+    | 'checkbox'
+    | 'password';
 
 /** Source de liste déroulante chargée à l'ouverture de la page. */
 export type OptionSourceKey =
@@ -33,6 +41,8 @@ export type FieldDef = {
     max?: number;
     /** Champ proposé uniquement à la création (ex. quantité initiale). */
     createOnly?: boolean;
+    /** Champ obligatoire seulement à la création (ex. mot de passe). */
+    requiredOnCreate?: boolean;
     /** Champ proposé uniquement à la modification. */
     editOnly?: boolean;
     /** Occupe toute la largeur de la grille du formulaire. */

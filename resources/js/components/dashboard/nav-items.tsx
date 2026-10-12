@@ -1,21 +1,29 @@
 import {
-    ChartColumnBig,
     CalendarCheck,
+    CalendarClock,
+    CalendarRange,
+    ChartColumnBig,
+    CloudRain,
     Droplets,
+    HandCoins,
     LayoutDashboard,
     MapPinned,
     Package,
     Settings,
+    Sprout,
     Tractor,
+    Users,
     Wallet,
+    Wheat,
 } from 'lucide-react';
 
 import { cn } from '../../lib/cn';
 import type { ComponentType } from 'react';
 
 /**
- * Navigation du tableau de bord. Utilisée par la maquette du hero
- * (icônes seules) et par l'aperçu immersif (icônes + libellés).
+ * Navigation de l'application. Chaque entrée pointe vers la page d'un module
+ * (`href` sert aussi de clé d'entrée active : il doit correspondre à
+ * `ResourceConfig.endpoint`).
  */
 export type DashboardNavItem = {
     label: string;
@@ -28,10 +36,17 @@ export const dashboardNav: DashboardNavItem[] = [
     { label: 'Vue d’ensemble', icon: LayoutDashboard, href: '/dashboard' },
     { label: 'Exploitations', icon: Tractor, href: '/exploitations' },
     { label: 'Parcelles', icon: MapPinned, href: '/parcelles' },
+    { label: 'Cultures', icon: Sprout, href: '/cultures' },
+    { label: 'Campagnes', icon: CalendarRange, href: '/campagnes' },
     { label: 'Activités', icon: CalendarCheck, href: '/activites' },
-    { label: 'Stocks', icon: Package, href: '/stocks', badge: '1' },
-    { label: 'Finances', icon: Wallet, href: '/finances' },
-    { label: 'Consommation d’eau', icon: Droplets, href: '/eau' },
+    { label: 'Intrants', icon: Package, href: '/intrants' },
+    { label: 'Récoltes', icon: Wheat, href: '/recoltes' },
+    { label: 'Dépenses', icon: Wallet, href: '/depenses' },
+    { label: 'Recettes', icon: HandCoins, href: '/recettes' },
+    { label: 'Ressources en eau', icon: Droplets, href: '/ressources-eau' },
+    { label: 'Irrigations', icon: CloudRain, href: '/irrigations' },
+    { label: 'Planifications', icon: CalendarClock, href: '/planifications' },
+    { label: 'Utilisateurs', icon: Users, href: '/comptes' },
     { label: 'Rapports', icon: ChartColumnBig, href: '/rapports' },
     { label: 'Paramètres', icon: Settings, href: '/parametres' },
 ];

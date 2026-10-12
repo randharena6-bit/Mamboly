@@ -103,6 +103,7 @@ export function ResourceForm<T extends ResourceRow>({
                     const error = errors[field.name]?.message as string | undefined;
                     const fieldOptions: Option[] =
                         field.options ?? (field.optionsFrom ? options[field.optionsFrom] ?? [] : []);
+                    const required = field.requiredOnCreate ? mode === 'create' : field.required;
 
                     if (field.type === 'checkbox') {
                         return (
@@ -130,7 +131,7 @@ export function ResourceForm<T extends ResourceRow>({
                             key={field.name}
                             id={id}
                             label={field.label}
-                            required={field.required}
+                            required={required}
                             hint={field.hint}
                             error={error}
                             className={field.full || field.type === 'textarea' ? 'sm:col-span-2' : undefined}
@@ -143,7 +144,7 @@ export function ResourceForm<T extends ResourceRow>({
                                             aria-describedby={describedBy}
                                             aria-invalid={error ? true : undefined}
                                             {...register(field.name, {
-                                                required: field.required ? 'Ce champ est obligatoire.' : false,
+                                                required: required ? 'Ce champ est obligatoire.' : false,
                                             })}
                                         >
                                             <option value="">
@@ -166,7 +167,7 @@ export function ResourceForm<T extends ResourceRow>({
                                             aria-invalid={error ? true : undefined}
                                             placeholder={field.placeholder}
                                             {...register(field.name, {
-                                                required: field.required ? 'Ce champ est obligatoire.' : false,
+                                                required: required ? 'Ce champ est obligatoire.' : false,
                                             })}
                                         />
                                     );
@@ -179,7 +180,9 @@ export function ResourceForm<T extends ResourceRow>({
                                           ? 'date'
                                           : field.type === 'datetime'
                                             ? 'datetime-local'
-                                            : 'text';
+                                            : field.type === 'password'
+                                              ? 'password'
+                                              : 'text';
 
                                 return (
                                     <Input
@@ -267,6 +270,11 @@ function toPayload(fields: ResourceConfig['fields'], values: FormValues): Record
 
         if (field.type === 'checkbox') {
             payload[field.name] = Boolean(value);
+            continue;
+        }
+
+        // Un mot de passe laissé vide n'est pas transmis : le mot de passe actuel est conservé.
+        if (field.type === 'password' && (value === '' || value === undefined || value === null)) {
             continue;
         }
 

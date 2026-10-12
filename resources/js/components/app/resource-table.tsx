@@ -205,7 +205,7 @@ export function ResourceTable<T extends ResourceRow>({
                             </div>
 
                             <dl className="mt-3 grid grid-cols-1 gap-1.5 text-sm">
-                                {config.columns.slice(1).map((column) => (
+                                {config.columns.slice(1).filter((column) => !column.hideOnMobile).map((column) => (
                                     <div key={column.key} className="flex items-center justify-between gap-3">
                                         <dt className="text-ink-400">{column.label}</dt>
                                         <dd className="text-right text-ink-700">{renderCell(column, row)}</dd>
