@@ -75,20 +75,18 @@ class StockMovementController extends Controller
         $type = StockMovementType::from($request->validated('type'));
         $direction = $request->validated('direction');
 
-        $incoming = $type->isIncoming();
+        // Un ajustement d'inventaire peut aller dans les deux sens : le client
+        // doit alors préciser la direction.
+        if ($type === StockMovementType::Ajustement) {
+            if (! in_array($direction, ['entree', 'sortie'], true)) {
+                throw ValidationException::withMessages([
+                    'direction' => 'Précisez le sens (entree ou sortie) pour un ajustement.',
+                ]);
+            }
 
-        if ($incoming === null) {
-            $incoming = match ($direction) {
-                'entree' => true,
-                'sortie' => false,
-                default => null,
-            };
-        }
-
-        if ($incoming === null) {
-            throw ValidationException::withMessages([
-                'direction' => 'Un sens est requis pour ce type de mouvement.',
-            ]);
+            $incoming = $direction === 'entree';
+        } else {
+            $incoming = $type->isIncoming();
         }
 
         return [$type->value, $incoming ? $quantity : -$quantity];

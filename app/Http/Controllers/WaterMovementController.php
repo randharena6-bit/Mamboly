@@ -80,16 +80,22 @@ class WaterMovementController extends Controller
 
         // Les types ambigus (correction, ajustement, transfert) s'appuient sur
         // `direction` ; les autres portent leur sens intrinsèque.
-        $explicit = in_array($type->value, ['correction', 'ajustement', 'transfert'], true);
+        $ambiguous = in_array($type, [
+            WaterMovementType::Correction,
+            WaterMovementType::Ajustement,
+            WaterMovementType::Transfert,
+        ], true);
 
-        $incoming = $explicit
-            ? $direction === 'entree'
-            : $type->isIncoming();
+        if ($ambiguous) {
+            if (! in_array($direction, ['entree', 'sortie'], true)) {
+                throw ValidationException::withMessages([
+                    'direction' => 'Précisez le sens (entree ou sortie) pour ce type de mouvement.',
+                ]);
+            }
 
-        if ($incoming === null) {
-            throw ValidationException::withMessages([
-                'direction' => 'Un sens est requis pour ce type de mouvement.',
-            ]);
+            $incoming = $direction === 'entree';
+        } else {
+            $incoming = $type->isIncoming();
         }
 
         return [$type->value, $incoming ? $quantity : -$quantity];

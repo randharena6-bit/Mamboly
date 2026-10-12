@@ -179,7 +179,7 @@ Route::middleware('auth')->group(function (): void {
 |
 */
 
-Route::middleware('auth')->group(function (): void {
+Route::middleware(['auth', 'db.actor'])->group(function (): void {
     Route::get('/parcelles', [PlotController::class, 'index'])->name('plots.index');
     Route::post('/parcelles', [PlotController::class, 'store'])->name('plots.store');
     Route::get('/parcelles/{plot}', [PlotController::class, 'show'])->name('plots.show');
