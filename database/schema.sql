@@ -907,7 +907,8 @@ CREATE TABLE public.notifications (
     notifiable_id   bigint      NOT NULL,
     data            text        NOT NULL,
     read_at         timestamptz,
-    created_at      timestamptz
+    created_at      timestamptz,
+    updated_at      timestamptz
 );
 
 

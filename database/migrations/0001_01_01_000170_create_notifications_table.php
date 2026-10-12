@@ -16,7 +16,8 @@ return new class extends Migration
             notifiable_id   bigint      NOT NULL,
             data            text        NOT NULL,
             read_at         timestamptz,
-            created_at      timestamptz
+            created_at      timestamptz,
+            updated_at      timestamptz
         );
         SQL);
     }

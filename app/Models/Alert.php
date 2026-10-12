@@ -31,6 +31,9 @@ class Alert extends Model
 {
     use BelongsToFarm;
 
+    /** Les alertes n'ont pas d'`updated_at` (lecture mise à jour via `read_at`). */
+    public const UPDATED_AT = null;
+
     protected $fillable = [
         'farm_id',
         'water_source_id',
