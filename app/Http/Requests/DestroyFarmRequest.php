@@ -9,6 +9,7 @@ class DestroyFarmRequest extends FormRequest
     public function authorize(): bool
     {
         $farm = $this->route('farm');
+
         return $this->user()?->can('delete', $farm) ?? false;
     }
 

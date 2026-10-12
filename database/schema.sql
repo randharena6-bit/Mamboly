@@ -916,6 +916,22 @@ CREATE TABLE public.notifications (
 --  5. INDEX
 -- =============================================================================
 
+
+CREATE TABLE public.personal_access_tokens (
+    id              bigserial PRIMARY KEY,
+    tokenable_type  varchar(255) NOT NULL,
+    tokenable_id    bigint      NOT NULL,
+    name            varchar(255) NOT NULL,
+    token           varchar(64)  NOT NULL UNIQUE,
+    abilities       text,
+    last_used_at    timestamptz,
+    expires_at      timestamptz,
+    created_at      timestamptz,
+    updated_at      timestamptz
+);
+CREATE INDEX personal_access_tokens_tokenable_type_tokenable_id_index ON public.personal_access_tokens (tokenable_type, tokenable_id);
+
+
 CREATE INDEX users_farm_id_index            ON users (farm_id);
 CREATE INDEX users_role_id_index            ON users (role_id);
 CREATE INDEX users_is_active_index          ON users (is_active) WHERE is_active;

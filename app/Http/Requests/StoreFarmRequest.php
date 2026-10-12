@@ -2,13 +2,14 @@
 
 namespace App\Http\Requests;
 
+use App\Models\Farm;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreFarmRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user()?->can('create', \App\Models\Farm::class) ?? false;
+        return $this->user()?->can('create', Farm::class) ?? false;
     }
 
     /** @return array<string, mixed> */

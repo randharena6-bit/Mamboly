@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\RespondsWithJson;
 use App\Http\Requests\IrrigationRequest;
 use App\Models\Irrigation;
-use App\Models\User;
 use App\Services\IrrigationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;

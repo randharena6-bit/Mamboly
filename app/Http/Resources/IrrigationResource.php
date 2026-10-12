@@ -18,7 +18,7 @@ class IrrigationResource extends JsonResource
             'unit' => $this->unit,
             'method' => $this->method,
             'status' => $this->status,
-            'scheduledAt' => $this->scheduled_at?.toIso8601String(),
+            'scheduledAt' => $this->scheduled_at?->toIso8601String(),
             'performedAt' => $this->performed_at?->toIso8601String(),
             'durationMinutes' => $this->duration_minutes,
             'performedBy' => $this->performed_by,

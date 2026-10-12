@@ -3,7 +3,7 @@
 namespace App\Providers;
 
 use App\Events\AlertRaised;
-use App\Listeners\SendAlertNotification;
+use App\Jobs\SendAlertNotificationJob;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
@@ -22,6 +22,6 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        Event::listen(AlertRaised::class, SendAlertNotification::class);
+        Event::listen(AlertRaised::class, fn (AlertRaised $event) => SendAlertNotificationJob::dispatch($event));
     }
 }

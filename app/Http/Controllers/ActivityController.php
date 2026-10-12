@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Enums\ActivityType;
 use App\Http\Controllers\Concerns\RespondsWithJson;
 use App\Http\Requests\ActivityRequest;
 use App\Models\Activity;

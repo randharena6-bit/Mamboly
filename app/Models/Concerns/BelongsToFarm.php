@@ -18,7 +18,7 @@ trait BelongsToFarm
 {
     public static function bootBelongsToFarm(): void
     {
-        static::addGlobalScope(new FarmScope());
+        static::addGlobalScope(new FarmScope);
     }
 
     /** @return BelongsTo<Farm, $this> */

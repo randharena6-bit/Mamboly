@@ -7,7 +7,6 @@ use App\Enums\IrrigationStatus;
 use App\Exceptions\InsufficientWaterException;
 use App\Models\Alert;
 use App\Models\Campaign;
-use App\Models\Irrigation;
 use App\Models\Plot;
 use App\Models\User;
 use App\Models\WaterSource;

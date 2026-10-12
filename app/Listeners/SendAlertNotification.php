@@ -4,7 +4,6 @@ namespace App\Listeners;
 
 use App\Enums\RoleName;
 use App\Events\AlertRaised;
-use App\Models\User;
 use App\Notifications\CriticalAlertNotification;
 use Illuminate\Support\Facades\Notification;
 

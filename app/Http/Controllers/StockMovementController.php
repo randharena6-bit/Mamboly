@@ -2,9 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\StockMovementType;
 use App\Http\Controllers\Concerns\RespondsWithJson;
 use App\Http\Requests\StockMovementRequest;
-use App\Enums\StockMovementType;
+use App\Models\Campaign;
 use App\Models\InputStock;
 use App\Models\StockMovement;
 use App\Services\StockService;
@@ -42,7 +43,7 @@ class StockMovementController extends Controller
             $delta,
             $type,
             $request->user(),
-            $campaign ? \App\Models\Campaign::find($campaign) : null,
+            $campaign ? Campaign::find($campaign) : null,
             note: $request->validated('note'),
         );
 
