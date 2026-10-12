@@ -28,7 +28,20 @@ class AgriWaterDemoSeeder extends Seeder
 
         $this->command?->info('Chargement du jeu de démonstration AgriWater…');
 
-        DB::unprepared(File::get($path));
+        $sql = File::get($path);
+
+        /*
+         * Le fichier SQL s'ouvre et se ferme par une transaction explicite
+         * (BEGIN/COMMIT). Lorsqu'une transaction est déjà active — cas des
+         * tests sous `RefreshDatabase` — ces bornes casseraient l'imbrication :
+         * on les retire pour que le jeu s'exécute dans la transaction ambiante.
+         */
+        if (DB::transactionLevel() > 0) {
+            $sql = preg_replace('/^\s*BEGIN;\s*$/m', '', $sql);
+            $sql = preg_replace('/^\s*COMMIT;\s*$/m', '', $sql);
+        }
+
+        DB::unprepared($sql);
 
         $this->refreshAnalytics();
 

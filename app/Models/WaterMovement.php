@@ -31,6 +31,9 @@ class WaterMovement extends Model
 {
     use BelongsToFarm;
 
+    /** Journal append-only : pas de `updated_at`. */
+    public const UPDATED_AT = null;
+
     protected $fillable = [
         'farm_id',
         'water_source_id',

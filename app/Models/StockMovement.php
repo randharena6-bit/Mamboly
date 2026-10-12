@@ -25,6 +25,9 @@ class StockMovement extends Model
 {
     use BelongsToFarm;
 
+    /** Historique append-only : pas de `updated_at`. */
+    public const UPDATED_AT = null;
+
     protected $fillable = [
         'farm_id',
         'input_id',
