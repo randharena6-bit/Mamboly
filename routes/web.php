@@ -2,8 +2,24 @@
 
 use App\Http\Controllers\Auth\AuthenticatedSessionController;
 use App\Http\Controllers\Auth\RegisteredUserController;
+use App\Http\Controllers\ActivityController;
+use App\Http\Controllers\AlertController;
+use App\Http\Controllers\CampaignController;
+use App\Http\Controllers\CropController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ExpenseController;
 use App\Http\Controllers\FarmController;
+use App\Http\Controllers\HarvestController;
+use App\Http\Controllers\InputController;
+use App\Http\Controllers\IrrigationController;
+use App\Http\Controllers\IrrigationScheduleController;
+use App\Http\Controllers\PlotController;
+use App\Http\Controllers\PriorityIrrigationController;
+use App\Http\Controllers\RevenueController;
+use App\Http\Controllers\StockMovementController;
+use App\Http\Controllers\UserController;
+use App\Http\Controllers\WaterMovementController;
+use App\Http\Controllers\WaterSourceController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -150,6 +166,127 @@ Route::middleware('auth')->group(function (): void {
         ->name('exploitations.alerts.read');
     Route::post('/exploitations/{farm}/alerts/read-all', [FarmController::class, 'markAllAlertsRead'])
         ->name('exploitations.alerts.read-all');
+});
+
+/*
+|--------------------------------------------------------------------------
+| Ressources métier (JSON, session)
+|--------------------------------------------------------------------------
+|
+| Endpoints consommés par l'îlot React de l'application. Tous les accès sont
+| filtrés par l'exploitation de l'utilisateur — `FarmScope` en lecture, les
+| politiques en écriture —, le périmètre n'est jamais décidé côté client.
+|
+*/
+
+Route::middleware('auth')->group(function (): void {
+    Route::get('/parcelles', [PlotController::class, 'index'])->name('plots.index');
+    Route::post('/parcelles', [PlotController::class, 'store'])->name('plots.store');
+    Route::get('/parcelles/{plot}', [PlotController::class, 'show'])->name('plots.show');
+    Route::put('/parcelles/{plot}', [PlotController::class, 'update'])->name('plots.update');
+    Route::patch('/parcelles/{plot}', [PlotController::class, 'update'])->name('plots.update.patch');
+    Route::delete('/parcelles/{plot}', [PlotController::class, 'destroy'])->name('plots.destroy');
+
+    Route::get('/cultures', [CropController::class, 'index'])->name('crops.index');
+    Route::post('/cultures', [CropController::class, 'store'])->name('crops.store');
+    Route::get('/cultures/{crop}', [CropController::class, 'show'])->name('crops.show');
+    Route::put('/cultures/{crop}', [CropController::class, 'update'])->name('crops.update');
+    Route::patch('/cultures/{crop}', [CropController::class, 'update'])->name('crops.update.patch');
+    Route::delete('/cultures/{crop}', [CropController::class, 'destroy'])->name('crops.destroy');
+
+    Route::get('/campagnes', [CampaignController::class, 'index'])->name('campaigns.index');
+    Route::post('/campagnes', [CampaignController::class, 'store'])->name('campaigns.store');
+    Route::get('/campagnes/{campaign}', [CampaignController::class, 'show'])->name('campaigns.show');
+    Route::put('/campagnes/{campaign}', [CampaignController::class, 'update'])->name('campaigns.update');
+    Route::patch('/campagnes/{campaign}', [CampaignController::class, 'update'])->name('campaigns.update.patch');
+    Route::delete('/campagnes/{campaign}', [CampaignController::class, 'destroy'])->name('campaigns.destroy');
+    Route::post('/campagnes/{campaign}/activer', [CampaignController::class, 'activate'])->name('campaigns.activate');
+    Route::post('/campagnes/{campaign}/suspendre', [CampaignController::class, 'suspend'])->name('campaigns.suspend');
+    Route::post('/campagnes/{campaign}/cloturer', [CampaignController::class, 'complete'])->name('campaigns.complete');
+    Route::post('/campagnes/{campaign}/annuler', [CampaignController::class, 'cancel'])->name('campaigns.cancel');
+
+    Route::get('/ressources-eau', [WaterSourceController::class, 'index'])->name('water-sources.index');
+    Route::post('/ressources-eau', [WaterSourceController::class, 'store'])->name('water-sources.store');
+    Route::get('/ressources-eau/{waterSource}', [WaterSourceController::class, 'show'])->name('water-sources.show');
+    Route::put('/ressources-eau/{waterSource}', [WaterSourceController::class, 'update'])->name('water-sources.update');
+    Route::patch('/ressources-eau/{waterSource}', [WaterSourceController::class, 'update'])->name('water-sources.update.patch');
+    Route::delete('/ressources-eau/{waterSource}', [WaterSourceController::class, 'destroy'])->name('water-sources.destroy');
+    Route::get('/ressources-eau/{waterSource}/mouvements', [WaterMovementController::class, 'sourceHistory'])->name('water-sources.movements');
+
+    Route::get('/mouvements-eau', [WaterMovementController::class, 'index'])->name('water-movements.index');
+    Route::post('/mouvements-eau', [WaterMovementController::class, 'store'])->name('water-movements.store');
+    Route::get('/mouvements-eau/{waterMovement}', [WaterMovementController::class, 'show'])->name('water-movements.show');
+
+    Route::get('/irrigations', [IrrigationController::class, 'index'])->name('irrigations.index');
+    Route::post('/irrigations', [IrrigationController::class, 'store'])->name('irrigations.store');
+    Route::get('/irrigations/{irrigation}', [IrrigationController::class, 'show'])->name('irrigations.show');
+    Route::put('/irrigations/{irrigation}', [IrrigationController::class, 'update'])->name('irrigations.update');
+    Route::patch('/irrigations/{irrigation}', [IrrigationController::class, 'update'])->name('irrigations.update.patch');
+    Route::delete('/irrigations/{irrigation}', [IrrigationController::class, 'destroy'])->name('irrigations.destroy');
+    Route::post('/irrigations/{irrigation}/valider', [IrrigationController::class, 'validate'])->name('irrigations.validate');
+    Route::post('/irrigations/{irrigation}/refuser', [IrrigationController::class, 'reject'])->name('irrigations.reject');
+    Route::post('/irrigations/{irrigation}/annuler', [IrrigationController::class, 'cancel'])->name('irrigations.cancel');
+
+    Route::get('/planifications', [IrrigationScheduleController::class, 'index'])->name('schedules.index');
+    Route::post('/planifications', [IrrigationScheduleController::class, 'store'])->name('schedules.store');
+    Route::get('/planifications/{schedule}', [IrrigationScheduleController::class, 'show'])->name('schedules.show');
+    Route::put('/planifications/{schedule}', [IrrigationScheduleController::class, 'update'])->name('schedules.update');
+    Route::patch('/planifications/{schedule}', [IrrigationScheduleController::class, 'update'])->name('schedules.update.patch');
+    Route::delete('/planifications/{schedule}', [IrrigationScheduleController::class, 'destroy'])->name('schedules.destroy');
+
+    Route::get('/intrants', [InputController::class, 'index'])->name('inputs.index');
+    Route::post('/intrants', [InputController::class, 'store'])->name('inputs.store');
+    Route::get('/intrants/{input}', [InputController::class, 'show'])->name('inputs.show');
+    Route::put('/intrants/{input}', [InputController::class, 'update'])->name('inputs.update');
+    Route::patch('/intrants/{input}', [InputController::class, 'update'])->name('inputs.update.patch');
+    Route::delete('/intrants/{input}', [InputController::class, 'destroy'])->name('inputs.destroy');
+    Route::get('/intrants/{input}/mouvements', [StockMovementController::class, 'inputHistory'])->name('inputs.movements');
+
+    Route::get('/mouvements-stock', [StockMovementController::class, 'index'])->name('stock-movements.index');
+    Route::post('/mouvements-stock', [StockMovementController::class, 'store'])->name('stock-movements.store');
+    Route::get('/mouvements-stock/{stockMovement}', [StockMovementController::class, 'show'])->name('stock-movements.show');
+
+    Route::get('/recoltes', [HarvestController::class, 'index'])->name('harvests.index');
+    Route::post('/recoltes', [HarvestController::class, 'store'])->name('harvests.store');
+    Route::get('/recoltes/{harvest}', [HarvestController::class, 'show'])->name('harvests.show');
+    Route::put('/recoltes/{harvest}', [HarvestController::class, 'update'])->name('harvests.update');
+    Route::patch('/recoltes/{harvest}', [HarvestController::class, 'update'])->name('harvests.update.patch');
+    Route::delete('/recoltes/{harvest}', [HarvestController::class, 'destroy'])->name('harvests.destroy');
+
+    Route::get('/depenses', [ExpenseController::class, 'index'])->name('expenses.index');
+    Route::post('/depenses', [ExpenseController::class, 'store'])->name('expenses.store');
+    Route::get('/depenses/{expense}', [ExpenseController::class, 'show'])->name('expenses.show');
+    Route::put('/depenses/{expense}', [ExpenseController::class, 'update'])->name('expenses.update');
+    Route::patch('/depenses/{expense}', [ExpenseController::class, 'update'])->name('expenses.update.patch');
+    Route::delete('/depenses/{expense}', [ExpenseController::class, 'destroy'])->name('expenses.destroy');
+
+    Route::get('/recettes', [RevenueController::class, 'index'])->name('revenues.index');
+    Route::post('/recettes', [RevenueController::class, 'store'])->name('revenues.store');
+    Route::get('/recettes/{revenue}', [RevenueController::class, 'show'])->name('revenues.show');
+    Route::put('/recettes/{revenue}', [RevenueController::class, 'update'])->name('revenues.update');
+    Route::patch('/recettes/{revenue}', [RevenueController::class, 'update'])->name('revenues.update.patch');
+    Route::delete('/recettes/{revenue}', [RevenueController::class, 'destroy'])->name('revenues.destroy');
+
+    Route::get('/activites', [ActivityController::class, 'index'])->name('activities.index');
+    Route::post('/activites', [ActivityController::class, 'store'])->name('activities.store');
+    Route::get('/activites/{activity}', [ActivityController::class, 'show'])->name('activities.show');
+    Route::put('/activites/{activity}', [ActivityController::class, 'update'])->name('activities.update');
+    Route::patch('/activites/{activity}', [ActivityController::class, 'update'])->name('activities.update.patch');
+    Route::delete('/activites/{activity}', [ActivityController::class, 'destroy'])->name('activities.destroy');
+
+    Route::get('/alertes', [AlertController::class, 'index'])->name('alerts.index');
+    Route::get('/alertes/{alert}', [AlertController::class, 'show'])->name('alerts.show');
+    Route::post('/alertes/{alert}/lue', [AlertController::class, 'markRead'])->name('alerts.read');
+    Route::post('/alertes/lues', [AlertController::class, 'markAllRead'])->name('alerts.read-all');
+
+    Route::get('/priorite-irrigation', [PriorityIrrigationController::class, 'index'])->name('priority-irrigation.index');
+
+    Route::get('/comptes', [UserController::class, 'index'])->name('users.index');
+    Route::post('/comptes', [UserController::class, 'store'])->name('users.store');
+    Route::get('/comptes/{user}', [UserController::class, 'show'])->name('users.show');
+    Route::put('/comptes/{user}', [UserController::class, 'update'])->name('users.update');
+    Route::patch('/comptes/{user}', [UserController::class, 'update'])->name('users.update.patch');
+    Route::delete('/comptes/{user}', [UserController::class, 'destroy'])->name('users.destroy');
 });
 
 Route::view('/demo', 'stub', [

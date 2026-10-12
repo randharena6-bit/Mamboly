@@ -52,9 +52,9 @@ class IrrigationController extends Controller
     {
         $this->authorize('delete', $irrigation);
 
-        // Une irrigation en attente peut être annulée ; une irrigation réalisée
-        // est retracée dans le journal d'eau (append-only).
-        $this->irrigations->cancel($irrigation, $request ?? auth()->user());
+        // Une irrigation en attente peut être supprimée ; une irrigation réalisée
+        // est retracée dans le journal d'eau (append-only) et passe par `cancel`.
+        $this->irrigations->cancel($irrigation, auth()->user());
 
         return $this->deleted('Irrigation annulée.');
     }
