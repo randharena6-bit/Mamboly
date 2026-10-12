@@ -14,10 +14,18 @@ use App\Models\User;
  */
 trait HandlesFarmScoping
 {
-    /** L'administrateur global est autorisé partout. */
-    public function before(User $user): ?bool
+    /**
+     * L'administrateur global supervise toutes les exploitations, mais ne crée
+     * pas de ressource métier à leur place (`create` reste borné à sa propre
+     * exploitation, nulle pour lui).
+     */
+    public function before(User $user, string $ability): ?bool
     {
-        return $user->isAdministrator() ? true : null;
+        if (! $user->isAdministrator()) {
+            return null;
+        }
+
+        return $ability === 'create' ? $user->farm_id !== null : true;
     }
 
     public function viewAny(User $user): bool
