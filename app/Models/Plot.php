@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToFarm;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -26,6 +27,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class Plot extends Model
 {
+    use BelongsToFarm;
+
     protected $fillable = [
         'farm_id',
         'code',
@@ -57,6 +60,24 @@ class Plot extends Model
     public function campaigns(): HasMany
     {
         return $this->hasMany(Campaign::class);
+    }
+
+    /** @return HasMany<Irrigation, $this> */
+    public function irrigations(): HasMany
+    {
+        return $this->hasMany(Irrigation::class);
+    }
+
+    /** @return HasMany<IrrigationSchedule, $this> */
+    public function irrigationSchedules(): HasMany
+    {
+        return $this->hasMany(IrrigationSchedule::class);
+    }
+
+    /** @return HasMany<Activity, $this> */
+    public function activities(): HasMany
+    {
+        return $this->hasMany(Activity::class);
     }
 
     /** Surface normalisée en hectares, quelle que soit l'unité de saisie. */
