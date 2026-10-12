@@ -2,6 +2,7 @@
 
 namespace Tests\Support;
 
+use Illuminate\Foundation\Testing\RefreshDatabaseState;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 
@@ -23,6 +24,14 @@ class AgriWaterSchema
 {
     public static function ensureExists(): void
     {
+        // `beforeRefreshingDatabase()` est rappelé à chaque test alors que les
+        // migrations ne tournent qu'une fois : sur un schéma déjà migré, il ne
+        // faut surtout pas supprimer les types (le DROP CASCADE emporterait les
+        // colonnes des tables existantes).
+        if (RefreshDatabaseState::$migrated) {
+            return;
+        }
+
         if (DB::getDriverName() !== 'pgsql') {
             throw new RuntimeException(
                 'Le schéma AgriWater requiert PostgreSQL. DB_CONNECTION doit valoir « pgsql » en test.'

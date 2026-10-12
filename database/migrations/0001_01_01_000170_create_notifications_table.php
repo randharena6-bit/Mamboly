@@ -10,7 +10,7 @@ return new class extends Migration
     {
         DB::unprepared(<<<'SQL'
         CREATE TABLE notifications (
-            uuid            uuid PRIMARY KEY,
+            id              uuid PRIMARY KEY,
             type            varchar(255) NOT NULL,
             notifiable_type varchar(255) NOT NULL,
             notifiable_id   bigint      NOT NULL,
