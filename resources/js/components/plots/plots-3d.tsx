@@ -467,7 +467,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
 
                 if (ring) {
                     const contour = ring.map(([lng, lat]) => {
-                        const point = tileset.project(lng, lat);
+                        const point = tileset.project(lat, lng);
                         return new THREE.Vector2(point.x, point.z);
                     });
 

@@ -249,7 +249,9 @@ export async function loadTerrainTileset(
 
         if (px < 0 || py < 0 || px >= CANVAS_SIZE || py >= CANVAS_SIZE) return 0;
 
-        return heights[py * CANVAS_SIZE + px];
+        // Flip Y to match Mercator projection
+        const flippedPy = CANVAS_SIZE - 1 - py;
+        return heights[flippedPy * CANVAS_SIZE + px];
     };
 
     return {
