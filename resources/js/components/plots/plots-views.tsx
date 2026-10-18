@@ -50,7 +50,7 @@ export function Plots3DView({ rows }: { rows: ResourceRow[] }) {
 
     return (
         <Suspense fallback={<Loading />}>
-            <Plots3D rows={rows} waterSources={layers.waterSources} />
+            <Plots3D rows={rows} waterSources={layers.waterSources} irrigations={layers.irrigations} />
         </Suspense>
     );
 }

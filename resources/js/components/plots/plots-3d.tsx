@@ -1,4 +1,4 @@
-import { Box, Droplets, Eye, EyeOff, Focus, Gamepad2, Mountain, Plane, Sun } from 'lucide-react';
+import { Box, CloudRain, Crosshair, Droplets, Eye, EyeOff, Focus, Gamepad2, Maximize2, Minimize2, Mountain, Plane, Sun } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -12,6 +12,7 @@ import { loadTerrainTileset, proceduralGroundTexture, terrainDefaults, type LatL
 export type Plots3DProps = {
     rows: ResourceRow[];
     waterSources: ResourceRow[];
+    irrigations?: ResourceRow[];
 };
 
 type NavMode = 'orbit' | 'fly' | 'walk';
@@ -190,15 +191,24 @@ function labelTexture(text: string, accent: string): THREE.CanvasTexture {
 type SceneApi = {
     setMode: (mode: NavMode) => void;
     setHour: (hour: number) => void;
-    setVisibility: (visibility: { plots?: boolean; water?: boolean; labels?: boolean; terrain?: boolean }) => void;
+    setVisibility: (visibility: {
+        plots?: boolean;
+        water?: boolean;
+        labels?: boolean;
+        terrain?: boolean;
+        links?: boolean;
+    }) => void;
+    setStatusFilter: (statuses: Record<string, boolean>) => void;
+    focusOn: (id: string | number) => void;
     resetView: () => void;
 };
 
 const colorToHex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`;
 
-export function Plots3D({ rows, waterSources }: Plots3DProps) {
+export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) {
     const host = useRef<HTMLDivElement>(null);
     const target = useRef<HTMLDivElement>(null);
+    const wrapper = useRef<HTMLDivElement>(null);
     const api = useRef<SceneApi | null>(null);
 
     const [status, setStatus] = useState<Status>('loading');
@@ -209,9 +219,17 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
     const [showPlots, setShowPlots] = useState(true);
     const [showWater, setShowWater] = useState(true);
     const [showLabels, setShowLabels] = useState(true);
-    const [selected, setSelected] = useState<ResourceRow | null>(null);
+    const [showLinks, setShowLinks] = useState(true);
+    const [fullscreen, setFullscreen] = useState(false);
+    const [statuses, setStatuses] = useState<Record<string, boolean>>({
+        disponible: true,
+        en_culture: true,
+        en_repos: true,
+        indisponible: true,
+    });
+    const [selected, setSelected] = useState<{ kind: 'plot' | 'water'; row: ResourceRow } | null>(null);
 
-    const visibility = useRef({ plots: true, water: true, labels: true, terrain: true });
+    const visibility = useRef({ plots: true, water: true, labels: true, terrain: true, links: true });
     const modeRef = useRef<NavMode>('orbit');
 
     useEffect(() => {
@@ -381,14 +399,17 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
             const labelsGroup = new THREE.Group();
             const plotsGroup = new THREE.Group();
             const waterGroup = new THREE.Group();
-            scene.add(labelsGroup, plotsGroup, waterGroup);
+            const linksGroup = new THREE.Group();
+            scene.add(labelsGroup, plotsGroup, waterGroup, linksGroup);
 
             plotsGroup.visible = visibility.current.plots;
             waterGroup.visible = visibility.current.water;
             labelsGroup.visible = visibility.current.labels;
+            linksGroup.visible = visibility.current.links;
 
             const labelScale = THREE.MathUtils.clamp(worldSize * 0.02, 8, 70);
             const pickTargets: THREE.Object3D[] = [];
+            const anchors = new Map<string, THREE.Vector3>();
 
             const addLabel = (text: string, accent: string, x: number, y: number, z: number) => {
                 const texture = labelTexture(text, accent);
@@ -403,6 +424,8 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                     texture.dispose();
                     material.dispose();
                 });
+
+                return sprite;
             };
 
             // --- Parcelles ---------------------------------------------------
@@ -477,18 +500,23 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                 }
 
                 mesh.castShadow = true;
-                mesh.userData = { kind: 'plot', id: row.id, row };
+                mesh.userData = { kind: 'plot', id: row.id, row, status: String(row.status ?? '') };
                 plotsGroup.add(mesh);
-                if (outline) plotsGroup.add(outline);
+                if (outline) {
+                    plotsGroup.add(outline);
+                    mesh.userData.outline = outline;
+                }
                 pickTargets.push(mesh);
+                anchors.set(String(row.id), new THREE.Vector3(center.x, heightAt(center.x, center.z), center.z));
 
-                addLabel(
+                const label = addLabel(
                     String(row.code ?? row.name ?? ''),
                     colorToHex(color),
                     center.x,
                     heightAt(center.x, center.z) + labelScale * 2.4,
                     center.z,
                 );
+                mesh.userData.label = label;
             }
 
             // --- Ressources en eau ------------------------------------------
@@ -526,16 +554,56 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                 mesh.userData = { kind: 'water', id: source.id, row: source };
                 waterGroup.add(mesh);
                 pickTargets.push(mesh);
+                anchors.set(String(source.id), new THREE.Vector3(center.x, base, center.z));
 
                 disposables.push(() => geometry.dispose(), () => material.dispose());
 
-                addLabel(
+                const label = addLabel(
                     String(source.name ?? ''),
                     critical ? '#ef4444' : '#38bdf8',
                     center.x,
                     base + height + labelScale * 1.4,
                     center.z,
                 );
+                mesh.userData.label = label;
+            }
+
+            // --- Liens d'irrigation -----------------------------------------
+            const linkMaterial = new THREE.MeshStandardMaterial({
+                color: 0x7dd3fc,
+                emissive: 0x0369a1,
+                emissiveIntensity: 0.35,
+                transparent: true,
+                opacity: 0.85,
+                roughness: 0.3,
+            });
+            disposables.push(() => linkMaterial.dispose());
+
+            const linkRadius = THREE.MathUtils.clamp(worldSize * 0.0016, 0.25, 1.6);
+
+            for (const irrigation of irrigations) {
+                const from = anchors.get(String(irrigation.water_source_id));
+                const to = anchors.get(String(irrigation.plot_id));
+                if (!from || !to) continue;
+
+                const points: THREE.Vector3[] = [];
+                const steps = 24;
+
+                for (let step = 0; step <= steps; step += 1) {
+                    const t = step / steps;
+                    const x = from.x + (to.x - from.x) * t;
+                    const z = from.z + (to.z - from.z) * t;
+                    // Le tube suit le relief, avec un léger arc au départ/arrivée.
+                    const arc = Math.sin(t * Math.PI) * linkRadius * 4;
+                    points.push(new THREE.Vector3(x, heightAt(x, z) + linkRadius * 2 + arc, z));
+                }
+
+                const curve = new THREE.CatmullRomCurve3(points);
+                const geometry = new THREE.TubeGeometry(curve, steps * 2, linkRadius, 6, false);
+                const tube = new THREE.Mesh(geometry, linkMaterial);
+                tube.userData = { kind: 'link', id: irrigation.id, row: irrigation };
+                linksGroup.add(tube);
+                disposables.push(() => geometry.dispose());
             }
 
             // --- Caméra & contrôles -----------------------------------------
@@ -620,7 +688,8 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                     const material = mesh.material as THREE.MeshStandardMaterial;
                     mesh.userData.baseEmissive = mesh.userData.baseEmissive ?? material.emissiveIntensity;
                     material.emissiveIntensity = 0.85;
-                    setSelected(mesh.userData.row as ResourceRow);
+                    const kind = mesh.userData.kind === 'water' ? 'water' : 'plot';
+                    setSelected({ kind, row: mesh.userData.row as ResourceRow });
                 } else {
                     setSelected(null);
                 }
@@ -780,6 +849,38 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                     if (next.water !== undefined) waterGroup.visible = next.water;
                     if (next.labels !== undefined) labelsGroup.visible = next.labels;
                     if (next.terrain !== undefined) terrain.visible = next.terrain;
+                    if (next.links !== undefined) linksGroup.visible = next.links;
+                },
+                setStatusFilter: (filter) => {
+                    for (const child of plotsGroup.children) {
+                        const status = String(child.userData?.status ?? '');
+                        if (!status) continue;
+                        const visible = filter[status] !== false;
+                        child.visible = visible;
+                        const label = child.userData?.label as THREE.Sprite | undefined;
+                        if (label) label.visible = visible;
+                        const outline = child.userData?.outline as THREE.Object3D | undefined;
+                        if (outline) outline.visible = visible;
+                    }
+                },
+                focusOn: (id) => {
+                    const point = anchors.get(String(id));
+                    if (!point) return;
+
+                    if (modeRef.current !== 'orbit') {
+                        modeRef.current = 'orbit';
+                        setMode('orbit');
+                        api.current?.setMode('orbit');
+                    }
+
+                    const distance = worldSize * 0.12;
+                    orbit.target.copy(point);
+                    camera.position.set(
+                        point.x + distance * 0.7,
+                        point.y + distance * 0.55,
+                        point.z + distance * 0.7,
+                    );
+                    orbit.update();
                 },
                 resetView: () => {
                     camera.position.copy(overview);
@@ -791,6 +892,7 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
 
             api.current.setMode(modeRef.current);
             api.current.setVisibility(visibility.current);
+            api.current.setStatusFilter(statuses);
 
             setStatus(tileset.hasImagery && tileset.hasElevation ? 'ready' : 'procedural');
             setZoomLabel(`${tileset.center.lat.toFixed(4)}, ${tileset.center.lng.toFixed(4)} · z${tileset.zoom}`);
@@ -813,7 +915,7 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
             disposeAll();
             api.current = null;
         };
-    }, [rows, waterSources]);
+    }, [rows, waterSources, irrigations]);
 
     // Applique le mode courant aux contrôles recréés après un changement de données.
     useEffect(() => {
@@ -825,22 +927,39 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
         api.current?.setHour(hour);
     }, [hour]);
 
+    useEffect(() => {
+        api.current?.setStatusFilter(statuses);
+    }, [statuses]);
+
     const chooseMode = (next: NavMode) => {
         modeRef.current = next;
         setMode(next);
         setLocked(false);
     };
 
-    const toggle = (key: 'plots' | 'water' | 'labels') => {
-        const nextValue =
-            key === 'plots' ? !showPlots : key === 'water' ? !showWater : !showLabels;
+    const toggle = (key: 'plots' | 'water' | 'labels' | 'links') => {
+        const current = key === 'plots' ? showPlots : key === 'water' ? showWater : key === 'labels' ? showLabels : showLinks;
+        const nextValue = !current;
 
         if (key === 'plots') setShowPlots(nextValue);
         if (key === 'water') setShowWater(nextValue);
         if (key === 'labels') setShowLabels(nextValue);
+        if (key === 'links') setShowLinks(nextValue);
 
         visibility.current[key] = nextValue;
         api.current?.setVisibility({ [key]: nextValue });
+    };
+
+    const toggleFullscreen = async () => {
+        if (!wrapper.current) return;
+
+        if (document.fullscreenElement) {
+            await document.exitFullscreen();
+            setFullscreen(false);
+        } else {
+            await wrapper.current.requestFullscreen();
+            setFullscreen(true);
+        }
     };
 
     const modeButton = (value: NavMode, label: string, Icon: typeof Gamepad2) => (
@@ -858,10 +977,10 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
 
     return (
         <div className="space-y-3">
-            <div className="relative">
+            <div ref={wrapper} className="relative">
                 <div
                     ref={host}
-                    className="h-[620px] w-full overflow-hidden rounded-2xl border border-ink-100 bg-slate-900"
+                    className={fullscreen ? 'h-screen w-full' : 'h-[620px] w-full overflow-hidden rounded-2xl border border-ink-100 bg-slate-900'}
                 />
 
                 {status === 'loading' && (
@@ -903,7 +1022,8 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                                     aria-label="Heure de la journée"
                                 />
                                 <span className="w-12 tabular-nums">
-                                    {String(Math.floor(hour)).padStart(2, '0')}:{hour % 1 === 0 ? '00' : '30'}
+                                    {String(Math.floor(hour)).padStart(2, '0')}:
+                                    {String(Math.round((hour % 1) * 60)).padStart(2, '0')}
                                 </span>
                             </div>
 
@@ -940,6 +1060,16 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                                 </button>
                                 <button
                                     type="button"
+                                    onClick={() => toggle('links')}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium ${
+                                        showLinks ? 'bg-sky-600 text-white' : 'bg-white/85 text-ink-700'
+                                    }`}
+                                >
+                                    <CloudRain className="size-3.5" />
+                                    Irrigations
+                                </button>
+                                <button
+                                    type="button"
                                     onClick={() => api.current?.resetView()}
                                     className="inline-flex items-center gap-1.5 rounded-lg bg-white/85 px-2 py-1 font-medium text-ink-700 hover:bg-white"
                                 >
@@ -947,6 +1077,42 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                                     Recentrer
                                 </button>
                             </div>
+
+                            {/* Filtres par statut */}
+                            <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
+                                {STATUS_LEGEND.map((item) => (
+                                    <label
+                                        key={item.key}
+                                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-white/85 px-2 py-1 font-medium text-ink-700"
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={statuses[item.key] !== false}
+                                            onChange={(event) =>
+                                                setStatuses((current) => ({ ...current, [item.key]: event.target.checked }))
+                                            }
+                                            className="accent-brand-600"
+                                        />
+                                        <span
+                                            className="inline-block size-2.5 rounded-full"
+                                            style={{ backgroundColor: colorToHex(STATUS_COLORS[item.key] ?? 0x64748b) }}
+                                        />
+                                        {item.label}
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Plein écran */}
+                        <div className="absolute top-3 right-3 z-10 flex flex-col gap-2">
+                            <button
+                                type="button"
+                                onClick={() => void toggleFullscreen()}
+                                className="rounded-lg border border-white/10 bg-slate-900/60 p-2 text-white backdrop-blur hover:bg-slate-900/80"
+                                aria-label={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+                            >
+                                {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+                            </button>
                         </div>
 
                         {/* Réticule en navigation */}
@@ -979,11 +1145,15 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                                     <span className="inline-block size-3 rounded-full bg-sky-400" />
                                     Point d’eau
                                 </li>
+                                <li className="flex items-center gap-2 text-white/80">
+                                    <span className="inline-block h-0.5 w-3 rounded bg-sky-300" />
+                                    Lien d’irrigation
+                                </li>
                             </ul>
                         </div>
 
                         {/* Repère de localisation */}
-                        <div className="absolute top-3 right-3 z-10 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-right text-xs text-white/80 backdrop-blur">
+                        <div className="absolute right-3 bottom-3 z-10 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-right text-xs text-white/80 backdrop-blur">
                             <p className="font-semibold text-white">Terrain réel</p>
                             <p className="tabular-nums">{zoomLabel}</p>
                         </div>
@@ -1008,18 +1178,41 @@ export function Plots3D({ rows, waterSources }: Plots3DProps) {
                 <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-soft">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-display text-base font-bold text-ink-900">
-                            {String(selected.code ?? '')} · {String(selected.name ?? '')}
+                            {selected.kind === 'water'
+                                ? String(selected.row.name ?? '')
+                                : `${String(selected.row.code ?? '')} · ${String(selected.row.name ?? '')}`}
                         </p>
+                        <button
+                            type="button"
+                            onClick={() => api.current?.focusOn(selected.row.id as string | number)}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
+                        >
+                            <Crosshair className="size-3.5" />
+                            Centrer
+                        </button>
                     </div>
-                    <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                        <Detail label="Statut" value={humanize(String(selected.status ?? '—'))} />
-                        <Detail label="Surface" value={`${selected.area ?? '—'} ${selected.area_unit ?? ''}`.trim()} />
-                        <Detail label="Priorité" value={humanize(String(selected.manual_priority ?? '—'))} />
-                        <Detail
-                            label="Humidité"
-                            value={selected.soil_moisture === null || selected.soil_moisture === undefined ? '—' : `${selected.soil_moisture} %`}
-                        />
-                    </dl>
+
+                    {selected.kind === 'water' ? (
+                        <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                            <Detail label="Type" value={humanize(String(selected.row.type ?? '—'))} />
+                            <Detail
+                                label="Quantité"
+                                value={`${selected.row.available_quantity ?? 0} / ${selected.row.capacity ?? 0} ${selected.row.unit ?? ''}`.trim()}
+                            />
+                            <Detail label="Seuil critique" value={`${selected.row.critical_threshold ?? '—'} ${selected.row.unit ?? ''}`.trim()} />
+                            <Detail label="Statut" value={humanize(String(selected.row.status ?? '—'))} />
+                        </dl>
+                    ) : (
+                        <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                            <Detail label="Statut" value={humanize(String(selected.row.status ?? '—'))} />
+                            <Detail label="Surface" value={`${selected.row.area ?? '—'} ${selected.row.area_unit ?? ''}`.trim()} />
+                            <Detail label="Priorité" value={humanize(String(selected.row.manual_priority ?? '—'))} />
+                            <Detail
+                                label="Humidité"
+                                value={selected.row.soil_moisture === null || selected.row.soil_moisture === undefined ? '—' : `${selected.row.soil_moisture} %`}
+                            />
+                        </dl>
+                    )}
                 </div>
             )}
         </div>
