@@ -210,7 +210,7 @@ export async function loadTerrainTileset(
         colorTexture.generateMipmaps = true;
         colorTexture.needsUpdate = true;
     } else {
-        colorTexture = new THREE.Texture();
+        colorTexture = proceduralGroundTexture();
     }
 
     const heights = elevationCanvas ? decodeElevation(elevationCanvas) : null;
@@ -269,31 +269,44 @@ export async function loadTerrainTileset(
     };
 }
 
-/** Texture procédurale herbeuse, utilisée si l'imagerie satellite est indisponible. */
 export function proceduralGroundTexture(): THREE.Texture {
-    const size = 512;
+    const size = 1024;
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
-        ctx.fillStyle = '#4b7a3a';
+        // Base grass
+        const gradient = ctx.createLinearGradient(0, 0, 0, size);
+        gradient.addColorStop(0, '#3f7c3f');
+        gradient.addColorStop(1, '#2f5f2f');
+        ctx.fillStyle = gradient;
         ctx.fillRect(0, 0, size, size);
 
-        const palette = ['#446f34', '#568a41', '#3f6a30', '#5f9349', '#4a7c39'];
+        // Subtle noise
+        const noise = ctx.createImageData(size, size);
+        for (let i = 0; i < noise.data.length; i += 4) {
+            const v = (Math.random() * 30) - 15;
+            noise.data[i] = v;
+            noise.data[i + 1] = v + 20;
+            noise.data[i + 2] = v;
+            noise.data[i + 3] = 8;
+        }
+        ctx.putImageData(noise, 0, 0);
 
-        for (let index = 0; index < 4200; index += 1) {
+        // Small clumps
+        const palette = ['#4a8a3a', '#3d7230', '#569141', '#4c7f38'];
+        for (let index = 0; index < 8000; index += 1) {
             const x = Math.random() * size;
             const y = Math.random() * size;
-            const radius = 1 + Math.random() * 3;
+            const radius = 0.8 + Math.random() * 2.4;
             ctx.fillStyle = palette[Math.floor(Math.random() * palette.length)];
-            ctx.globalAlpha = 0.35 + Math.random() * 0.4;
+            ctx.globalAlpha = 0.18 + Math.random() * 0.25;
             ctx.beginPath();
             ctx.arc(x, y, radius, 0, Math.PI * 2);
             ctx.fill();
         }
-
         ctx.globalAlpha = 1;
     }
 
@@ -301,7 +314,10 @@ export function proceduralGroundTexture(): THREE.Texture {
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.wrapS = THREE.RepeatWrapping;
     texture.wrapT = THREE.RepeatWrapping;
-    texture.repeat.set(24, 24);
+    texture.repeat.set(56, 56);
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+    texture.generateMipmaps = true;
     texture.needsUpdate = true;
 
     return texture;

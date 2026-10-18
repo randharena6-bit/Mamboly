@@ -333,12 +333,17 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             // --- Terrain -----------------------------------------------------
             let groundTexture = tileset.colorTexture;
             let generatedTexture: THREE.Texture | null = null;
+            let aoMap: THREE.Texture | null = null;
+            let normalMap: THREE.Texture | null = null;
 
             if (!tileset.hasImagery) {
                 generatedTexture = proceduralGroundTexture();
-                generatedTexture.repeat.set(Math.max(8, Math.round(worldSize / 40)), Math.max(8, Math.round(worldSize / 40)));
                 groundTexture = generatedTexture;
             }
+
+            // Light ambient occlusion for better realism
+            aoMap = generatedTexture || null; // reuse for subtle variation
+            normalMap = generatedTexture || null;
 
             const columns = RESOLUTION + 1;
             const vertexCount = columns * columns;
@@ -380,7 +385,11 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
 
             const terrainMaterial = new THREE.MeshStandardMaterial({
                 map: groundTexture,
-                roughness: 0.97,
+                aoMap: aoMap ?? undefined,
+                aoMapIntensity: 0.4,
+                normalMap: normalMap ?? undefined,
+                normalScale: new THREE.Vector2(0.5, 0.5),
+                roughness: 0.8,
                 metalness: 0,
             });
 
@@ -393,6 +402,8 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                 () => terrainMaterial.dispose(),
                 () => groundTexture.dispose(),
                 () => generatedTexture?.dispose(),
+                () => aoMap?.dispose(),
+                () => normalMap?.dispose(),
             );
 
             // --- Groupes -----------------------------------------------------
