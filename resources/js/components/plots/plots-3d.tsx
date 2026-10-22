@@ -1,5 +1,20 @@
-import { Box, CloudRain, Crosshair, Droplets, Eye, EyeOff, Focus, Gamepad2, Maximize2, Minimize2, Mountain, Plane, Sun } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import {
+    Box,
+    CloudRain,
+    Crosshair,
+    Droplets,
+    Focus,
+    Gamepad2,
+    Gauge,
+    Maximize2,
+    Minimize2,
+    Mountain,
+    Pause,
+    Play,
+    Plane,
+    Sun,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
@@ -7,7 +22,20 @@ import { Sky } from 'three/examples/jsm/objects/Sky.js';
 
 import type { ResourceRow } from '../../resources/types';
 import { humanize } from '../app/status-badge';
-import { loadTerrainTileset, proceduralGroundTexture, terrainDefaults, type LatLng } from './terrain';
+import { createProceduralTileset, loadTerrainTileset, type TerrainTileset } from './terrain';
+import { DayNightCycle, DAY_LENGTHS } from './scene/day-night';
+import {
+    buildEntities,
+    colorToHex,
+    locatedCount,
+    resolveEntityLocations,
+    STATUS_COLORS,
+    STATUS_LEGEND,
+} from './scene/entities';
+import { detectInitialQuality, QUALITY_PROFILES, type QualityLevel, type QualityProfile } from './scene/quality';
+import { Vegetation } from './scene/vegetation';
+import { WaterSurfaces } from './scene/water';
+import { WeatherSystem, WEATHERS, type WeatherId } from './scene/weather';
 
 export type Plots3DProps = {
     rows: ResourceRow[];
@@ -17,193 +45,24 @@ export type Plots3DProps = {
 
 type NavMode = 'orbit' | 'fly' | 'walk';
 type Status = 'loading' | 'ready' | 'procedural' | 'error';
+type LayerKey = 'plots' | 'water' | 'labels' | 'links' | 'terrain';
 
-const DEFAULT_CENTER: LatLng = terrainDefaults.defaultCenter;
-
-const STATUS_COLORS: Record<string, number> = {
-    disponible: 0x22c55e,
-    en_culture: 0x3b82f6,
-    en_repos: 0xf59e0b,
-    indisponible: 0xef4444,
-};
-
-const STATUS_LEGEND: Array<{ key: string; label: string }> = [
-    { key: 'disponible', label: 'Disponible' },
-    { key: 'en_culture', label: 'En culture' },
-    { key: 'en_repos', label: 'En repos' },
-    { key: 'indisponible', label: 'Indisponible' },
-];
-
-const VERTICAL_EXAGGERATION = 1.6;
 const RESOLUTION = 160;
-
-const num = (value: unknown, fallback = 0): number => {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-function latLngOf(row: ResourceRow): LatLng | null {
-    const lat = Number(row.latitude);
-    const lng = Number(row.longitude);
-
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
-
-    return { lat, lng };
-}
-
-function areaM2(row: ResourceRow): number {
-    const value = Number(row.area);
-    if (!Number.isFinite(value) || value <= 0) return 120;
-
-    switch (String(row.area_unit)) {
-        case 'ha':
-            return value * 10000;
-        case 'are':
-        case 'a':
-            return value * 100;
-        default:
-            return value;
-    }
-}
-
-function outerRing(row: ResourceRow): Array<[number, number]> | null {
-    const boundary = row.boundary;
-    if (boundary === null || boundary === undefined || typeof boundary !== 'object') return null;
-
-    let coordinates: unknown = boundary;
-    if (!Array.isArray(boundary)) {
-        coordinates = (boundary as Record<string, unknown>).coordinates;
-    }
-
-    if (!Array.isArray(coordinates) || coordinates.length === 0) return null;
-
-    const first = coordinates[0];
-    if (!Array.isArray(first)) return null;
-
-    const ring = (Array.isArray(first[0]) ? coordinates[0] : coordinates) as unknown[];
-    const points: Array<[number, number]> = [];
-
-    for (const point of ring) {
-        if (!Array.isArray(point) || point.length < 2) continue;
-        const lng = Number(point[0]);
-        const lat = Number(point[1]);
-        if (Number.isFinite(lng) && Number.isFinite(lat)) points.push([lng, lat]);
-    }
-
-    return points.length >= 3 ? points : null;
-}
-
-/**
- * Coordonnées de chaque ligne : réelles quand elles existent, sinon une grille
- * resserrée autour du barycentre pour que tout apparaisse sur le terrain.
- */
-function resolveLocations(rows: ResourceRow[], waterSources: ResourceRow[]) {
-    const located = [...rows, ...waterSources]
-        .map(latLngOf)
-        .filter((point): point is LatLng => point !== null);
-
-    const center: LatLng = located.length
-        ? {
-              lat: located.reduce((sum, point) => sum + point.lat, 0) / located.length,
-              lng: located.reduce((sum, point) => sum + point.lng, 0) / located.length,
-          }
-        : DEFAULT_CENTER;
-
-    const fill = (source: ResourceRow[]): Map<string, LatLng> => {
-        const map = new Map<string, LatLng>();
-        const missing = source.filter((row) => latLngOf(row) === null);
-        const columns = Math.max(1, Math.ceil(Math.sqrt(missing.length)));
-        const lines = Math.max(1, Math.ceil(missing.length / columns));
-
-        // Étendue plausible d'une exploitation (mètres) pour que les parcelles
-        // restent lisibles sur un terrain à résolution zodiacale (z15).
-        const spanMeters = Math.min(1150, Math.max(420, 150 * Math.sqrt(missing.length)));
-        const stepLat = spanMeters / lines / 111320;
-        const stepLng = spanMeters / columns / (111320 * Math.cos((center.lat * Math.PI) / 180));
-
-        let index = 0;
-
-        for (const row of source) {
-            const provided = latLngOf(row);
-
-            if (provided) {
-                map.set(String(row.id), provided);
-                continue;
-            }
-
-            const column = index % columns;
-            const line = Math.floor(index / columns);
-            map.set(String(row.id), {
-                lat: center.lat - (line - (lines - 1) / 2) * stepLat,
-                lng: center.lng + (column - (columns - 1) / 2) * stepLng,
-            });
-            index += 1;
-        }
-
-        return map;
-    };
-
-    return {
-        center,
-        plotLocations: fill(rows),
-        waterLocations: fill(waterSources),
-        allPoints: [...rows, ...waterSources].length
-            ? [
-                  ...[...fill(rows).values()],
-                  ...[...fill(waterSources).values()],
-              ]
-            : [],
-    };
-}
-
-function labelTexture(text: string, accent: string): THREE.CanvasTexture {
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 72;
-
-    const ctx = canvas.getContext('2d');
-    const texture = new THREE.CanvasTexture(canvas);
-
-    if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
-        ctx.beginPath();
-        ctx.roundRect(4, 8, canvas.width - 8, canvas.height - 16, 16);
-        ctx.fill();
-
-        ctx.fillStyle = accent;
-        ctx.fillRect(4, 8, 8, canvas.height - 16);
-
-        ctx.fillStyle = '#f8fafc';
-        ctx.font = 'bold 34px system-ui, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text.slice(0, 16), canvas.width / 2, canvas.height / 2 + 1);
-        texture.needsUpdate = true;
-    }
-
-    texture.colorSpace = THREE.SRGBColorSpace;
-
-    return texture;
-}
+const VERTICAL_EXAGGERATION = 1.6;
+/** Actualisation du curseur d'heure pendant le cycle en cours. */
+const HOUR_SYNC_MS = 250;
 
 type SceneApi = {
     setMode: (mode: NavMode) => void;
     setHour: (hour: number) => void;
-    setVisibility: (visibility: {
-        plots?: boolean;
-        water?: boolean;
-        labels?: boolean;
-        terrain?: boolean;
-        links?: boolean;
-    }) => void;
+    setDayLength: (seconds: number) => void;
+    setWeather: (weather: WeatherId) => void;
+    setQuality: (profile: QualityProfile) => void;
+    setVisibility: (visibility: Partial<Record<LayerKey, boolean>>) => void;
     setStatusFilter: (statuses: Record<string, boolean>) => void;
     focusOn: (id: string | number) => void;
     resetView: () => void;
 };
-
-const colorToHex = (value: number): string => `#${value.toString(16).padStart(6, '0')}`;
 
 export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) {
     const host = useRef<HTMLDivElement>(null);
@@ -211,10 +70,20 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
     const wrapper = useRef<HTMLDivElement>(null);
     const api = useRef<SceneApi | null>(null);
 
+    /** Signature des données : la scène n'est reconstruite que si elles changent. */
+    const dataKey = useMemo(() => JSON.stringify([rows, waterSources, irrigations]), [rows, waterSources, irrigations]);
+    const dataRef = useRef({ rows, waterSources, irrigations });
+    dataRef.current = { rows, waterSources, irrigations };
+
     const [status, setStatus] = useState<Status>('loading');
-    const [zoomLabel, setZoomLabel] = useState('');
+    const [sceneOrigin, setSceneOrigin] = useState<'satellite' | 'relief' | 'procedural'>('procedural');
+    const [mapLabel, setMapLabel] = useState('');
     const [mode, setMode] = useState<NavMode>('orbit');
     const [hour, setHour] = useState(14);
+    const [playing, setPlaying] = useState(false);
+    const [dayLength, setDayLength] = useState('10min');
+    const [weather, setWeather] = useState<WeatherId>('clair');
+    const [quality, setQuality] = useState<QualityLevel>(() => detectInitialQuality().id);
     const [locked, setLocked] = useState(false);
     const [showPlots, setShowPlots] = useState(true);
     const [showWater, setShowWater] = useState(true);
@@ -229,8 +98,19 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
     });
     const [selected, setSelected] = useState<{ kind: 'plot' | 'water'; row: ResourceRow } | null>(null);
 
-    const visibility = useRef({ plots: true, water: true, labels: true, terrain: true, links: true });
+    const visibility = useRef<Record<LayerKey, boolean>>({
+        plots: true,
+        water: true,
+        labels: true,
+        terrain: true,
+        links: true,
+    });
     const modeRef = useRef<NavMode>('orbit');
+    const sceneHour = useRef<number | null>(null);
+
+    /** Entités réellement géolocalisées (le reste est explicitement estimé). */
+    const located = useMemo(() => locatedCount(rows, waterSources), [rows, waterSources]);
+    const total = rows.length + waterSources.length;
 
     useEffect(() => {
         const container = host.current;
@@ -238,11 +118,11 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
 
         let disposed = false;
         let frame = 0;
-        const disposables: Array<() => void> = [];
+        const disposers: Array<() => void> = [];
 
         const disposeAll = () => {
-            disposables.forEach((dispose) => dispose());
-            disposables.length = 0;
+            disposers.forEach((dispose) => dispose());
+            disposers.length = 0;
         };
 
         const boot = async () => {
@@ -255,7 +135,8 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                 return;
             }
 
-            webgl.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            const initialProfile = QUALITY_PROFILES[quality] ?? detectInitialQuality();
+            webgl.setPixelRatio(Math.min(window.devicePixelRatio, initialProfile.maxPixelRatio));
             webgl.setSize(container.clientWidth, container.clientHeight);
             webgl.shadowMap.enabled = true;
             webgl.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -266,7 +147,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
 
             // Nettoyage précoce : si le composant est démonté pendant le
             // chargement asynchrone des tuiles, le contexte WebGL ne fuit pas.
-            disposables.push(() => {
+            disposers.push(() => {
                 cancelAnimationFrame(frame);
                 api.current = null;
                 webgl.dispose();
@@ -291,14 +172,16 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             skyMaterial.uniforms.mieCoefficient.value = 0.005;
             skyMaterial.uniforms.mieDirectionalG.value = 0.8;
 
-            const sunDirection = new THREE.Vector3();
             const sunLight = new THREE.DirectionalLight(0xffffff, 3);
             sunLight.castShadow = true;
-            sunLight.shadow.mapSize.set(2048, 2048);
+            sunLight.shadow.mapSize.set(initialProfile.shadowMapSize, initialProfile.shadowMapSize);
             sunLight.shadow.bias = -0.0006;
             sunLight.shadow.normalBias = 2;
             scene.add(sunLight);
             scene.add(sunLight.target);
+
+            const moonLight = new THREE.DirectionalLight(0x93b4ff, 0);
+            scene.add(moonLight);
 
             const hemi = new THREE.HemisphereLight(0xbfd8ea, 0x3f3a2f, 0.7);
             scene.add(hemi);
@@ -306,18 +189,30 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             const fog = new THREE.Fog(0xbfd8ea, 1000, 6000);
             scene.fog = fog;
 
-            const locations = resolveLocations(rows, waterSources);
-            const tileset = await loadTerrainTileset(locations.allPoints.length ? locations.allPoints : [locations.center]);
+            const { rows: currentRows, waterSources: currentWater, irrigations: currentIrrigations } = dataRef.current;
+            const locations = resolveEntityLocations(currentRows, currentWater);
+            const hasGeo = locatedCount(currentRows, currentWater) > 0;
+
+            let tileset: TerrainTileset | null = null;
+            if (hasGeo) {
+                tileset = await loadTerrainTileset(locations.allPoints.length ? locations.allPoints : [locations.center]);
+            }
+            if (!tileset || (!tileset.hasImagery && !tileset.hasElevation)) {
+                tileset?.dispose();
+                tileset = createProceduralTileset();
+            }
+
+            const terrain = tileset;
 
             if (disposed) {
-                tileset.dispose();
+                terrain.dispose();
                 disposeAll();
                 webgl.dispose();
                 webgl.domElement.remove();
                 return;
             }
 
-            const worldSize = tileset.worldSize;
+            const worldSize = terrain.worldSize;
             const shadowCamera = sunLight.shadow.camera as THREE.OrthographicCamera;
             shadowCamera.left = -worldSize * 0.9;
             shadowCamera.right = worldSize * 0.9;
@@ -326,24 +221,13 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             shadowCamera.near = 1;
             shadowCamera.far = worldSize * 6;
             shadowCamera.updateProjectionMatrix();
-            const exaggeration = VERTICAL_EXAGGERATION;
-            const yOffset = -tileset.minElevation * exaggeration;
-            const heightAt = (x: number, z: number) => tileset.heightAt(x, z) * exaggeration + yOffset;
+
+            const yOffset = -terrain.minElevation * VERTICAL_EXAGGERATION;
+            const heightAt = (x: number, z: number) =>
+                terrain.heightAt(x, z) * VERTICAL_EXAGGERATION + yOffset;
 
             // --- Terrain -----------------------------------------------------
-            let groundTexture = tileset.colorTexture;
-            let generatedTexture: THREE.Texture | null = null;
-            let aoMap: THREE.Texture | null = null;
-            let normalMap: THREE.Texture | null = null;
-
-            if (!tileset.hasImagery) {
-                generatedTexture = proceduralGroundTexture();
-                groundTexture = generatedTexture;
-            }
-
-            // Light ambient occlusion for better realism
-            aoMap = generatedTexture || null; // reuse for subtle variation
-            normalMap = generatedTexture || null;
+            const groundTexture = terrain.colorTexture;
 
             const columns = RESOLUTION + 1;
             const vertexCount = columns * columns;
@@ -385,237 +269,73 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
 
             const terrainMaterial = new THREE.MeshStandardMaterial({
                 map: groundTexture,
-                aoMap: aoMap ?? undefined,
-                aoMapIntensity: 0.4,
-                normalMap: normalMap ?? undefined,
-                normalScale: new THREE.Vector2(0.5, 0.5),
-                roughness: 0.8,
+                roughness: 0.85,
                 metalness: 0,
             });
 
-            const terrain = new THREE.Mesh(terrainGeometry, terrainMaterial);
-            terrain.receiveShadow = true;
-            scene.add(terrain);
+            const terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
+            terrainMesh.receiveShadow = true;
+            scene.add(terrainMesh);
 
-            disposables.push(
+            disposers.push(
                 () => terrainGeometry.dispose(),
                 () => terrainMaterial.dispose(),
                 () => groundTexture.dispose(),
-                () => generatedTexture?.dispose(),
-                () => aoMap?.dispose(),
-                () => normalMap?.dispose(),
+                () => terrain.dispose(),
             );
 
-            // --- Groupes -----------------------------------------------------
-            const labelsGroup = new THREE.Group();
-            const plotsGroup = new THREE.Group();
-            const waterGroup = new THREE.Group();
-            const linksGroup = new THREE.Group();
-            scene.add(labelsGroup, plotsGroup, waterGroup, linksGroup);
-
-            plotsGroup.visible = visibility.current.plots;
-            waterGroup.visible = visibility.current.water;
-            labelsGroup.visible = visibility.current.labels;
-            linksGroup.visible = visibility.current.links;
-
-            const labelScale = THREE.MathUtils.clamp(worldSize * 0.02, 8, 70);
-            const pickTargets: THREE.Object3D[] = [];
-            const anchors = new Map<string, THREE.Vector3>();
-
-            const addLabel = (text: string, accent: string, x: number, y: number, z: number) => {
-                const texture = labelTexture(text, accent);
-                const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
-                const sprite = new THREE.Sprite(material);
-                sprite.scale.set(labelScale * 3.4, labelScale, 1);
-                sprite.position.set(x, y, z);
-                sprite.renderOrder = 10;
-                labelsGroup.add(sprite);
-
-                disposables.push(() => {
-                    texture.dispose();
-                    material.dispose();
-                });
-
-                return sprite;
-            };
-
-            // --- Parcelles ---------------------------------------------------
-            for (const row of rows) {
-                const location = locations.plotLocations.get(String(row.id));
-                if (!location) continue;
-
-                const color = STATUS_COLORS[String(row.status)] ?? 0x64748b;
-                const center = tileset.project(location.lat, location.lng);
-                const ring = outerRing(row);
-                const material = new THREE.MeshStandardMaterial({
-                    color,
-                    emissive: color,
-                    emissiveIntensity: 0.12,
-                    roughness: 0.5,
-                    metalness: 0.05,
-                    transparent: true,
-                    opacity: 0.92,
-                    side: THREE.DoubleSide,
-                    polygonOffset: true,
-                    polygonOffsetFactor: -3,
-                    polygonOffsetUnits: -3,
-                });
-                disposables.push(() => material.dispose());
-
-                let mesh: THREE.Mesh;
-                let outline: THREE.LineLoop | null = null;
-
-                if (ring) {
-                    const contour = ring.map(([lng, lat]) => {
-                        const point = tileset.project(lat, lng);
-                        return new THREE.Vector2(point.x, point.z);
-                    });
-
-                    const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
-                    const vertexArray = new Float32Array(contour.length * 3);
-
-                    contour.forEach((point, index) => {
-                        vertexArray[index * 3] = point.x;
-                        vertexArray[index * 3 + 1] = heightAt(point.x, point.y) + 0.8;
-                        vertexArray[index * 3 + 2] = point.y;
-                    });
-
-                    const geometry = new THREE.BufferGeometry();
-                    geometry.setAttribute('position', new THREE.BufferAttribute(vertexArray, 3));
-                    geometry.setIndex(triangles.flat());
-                    geometry.computeVertexNormals();
-
-                    mesh = new THREE.Mesh(geometry, material);
-                    disposables.push(() => geometry.dispose());
-
-                    const outlinePoints = contour.map(
-                        (point) => new THREE.Vector3(point.x, heightAt(point.x, point.y) + 1.1, point.y),
-                    );
-                    const outlineGeometry = new THREE.BufferGeometry().setFromPoints(outlinePoints);
-                    const outlineMaterial = new THREE.LineBasicMaterial({ color: 0x0f172a, transparent: true, opacity: 0.5 });
-                    outline = new THREE.LineLoop(outlineGeometry, outlineMaterial);
-                    disposables.push(() => outlineGeometry.dispose(), () => outlineMaterial.dispose());
-                } else {
-                    const radius = THREE.MathUtils.clamp(
-                        Math.sqrt(areaM2(row) / Math.PI),
-                        worldSize * 0.014,
-                        worldSize * 0.09,
-                    );
-                    const geometry = new THREE.CircleGeometry(radius, 32);
-                    geometry.rotateX(-Math.PI / 2);
-                    geometry.translate(0, heightAt(center.x, center.z) + 0.8, 0);
-
-                    mesh = new THREE.Mesh(geometry, material);
-                    mesh.position.set(center.x, 0, center.z);
-                    disposables.push(() => geometry.dispose());
-                }
-
-                mesh.castShadow = true;
-                mesh.userData = { kind: 'plot', id: row.id, row, status: String(row.status ?? '') };
-                plotsGroup.add(mesh);
-                if (outline) {
-                    plotsGroup.add(outline);
-                    mesh.userData.outline = outline;
-                }
-                pickTargets.push(mesh);
-                anchors.set(String(row.id), new THREE.Vector3(center.x, heightAt(center.x, center.z), center.z));
-
-                const label = addLabel(
-                    String(row.code ?? row.name ?? ''),
-                    colorToHex(color),
-                    center.x,
-                    heightAt(center.x, center.z) + labelScale * 2.4,
-                    center.z,
-                );
-                mesh.userData.label = label;
-            }
-
-            // --- Ressources en eau ------------------------------------------
-            for (const source of waterSources) {
-                const location = locations.waterLocations.get(String(source.id));
-                if (!location) continue;
-
-                const center = tileset.project(location.lat, location.lng);
-                const base = heightAt(center.x, center.z);
-                const ratio = THREE.MathUtils.clamp(
-                    num(source.available_quantity, 0) / Math.max(num(source.capacity, 1), 1),
-                    0,
-                    1,
-                );
-                const critical = num(source.available_quantity, 0) <= num(source.critical_threshold, 0);
-                const radius = THREE.MathUtils.clamp(worldSize * 0.012, 3, 22);
-                const height = radius * (0.7 + ratio * 2.4);
-
-                const geometry = new THREE.CylinderGeometry(radius, radius, height, 40, 1, false);
-                geometry.translate(0, height / 2, 0);
-
-                const material = new THREE.MeshStandardMaterial({
-                    color: critical ? 0xef4444 : 0x38bdf8,
-                    emissive: critical ? 0x7f1d1d : 0x0369a1,
-                    emissiveIntensity: 0.25,
-                    transparent: true,
-                    opacity: 0.78,
-                    roughness: 0.15,
-                    metalness: 0.1,
-                });
-
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.position.set(center.x, base, center.z);
-                mesh.castShadow = true;
-                mesh.userData = { kind: 'water', id: source.id, row: source };
-                waterGroup.add(mesh);
-                pickTargets.push(mesh);
-                anchors.set(String(source.id), new THREE.Vector3(center.x, base, center.z));
-
-                disposables.push(() => geometry.dispose(), () => material.dispose());
-
-                const label = addLabel(
-                    String(source.name ?? ''),
-                    critical ? '#ef4444' : '#38bdf8',
-                    center.x,
-                    base + height + labelScale * 1.4,
-                    center.z,
-                );
-                mesh.userData.label = label;
-            }
-
-            // --- Liens d'irrigation -----------------------------------------
-            const linkMaterial = new THREE.MeshStandardMaterial({
-                color: 0x7dd3fc,
-                emissive: 0x0369a1,
-                emissiveIntensity: 0.35,
-                transparent: true,
-                opacity: 0.85,
-                roughness: 0.3,
+            // --- Entités métier (identifiants réels conservés) ---------------
+            const entities = buildEntities({
+                rows: currentRows,
+                waterSources: currentWater,
+                irrigations: currentIrrigations,
+                tileset: terrain,
+                heightAt,
+                disposers,
             });
-            disposables.push(() => linkMaterial.dispose());
 
-            const linkRadius = THREE.MathUtils.clamp(worldSize * 0.0016, 0.25, 1.6);
+            scene.add(entities.labels, entities.plots, entities.water, entities.links);
 
-            for (const irrigation of irrigations) {
-                const from = anchors.get(String(irrigation.water_source_id));
-                const to = anchors.get(String(irrigation.plot_id));
-                if (!from || !to) continue;
+            const waterSurfaces = new WaterSurfaces({
+                scene,
+                sources: entities.waterVisuals,
+                decor: terrain.decor,
+                heightAt,
+                worldSize,
+            });
+            disposers.push(() => waterSurfaces.dispose());
 
-                const points: THREE.Vector3[] = [];
-                const steps = 24;
+            const vegetation = new Vegetation({
+                scene,
+                heightAt,
+                worldSize,
+                profile: initialProfile,
+                exclude: entities.exclude,
+            });
+            disposers.push(() => vegetation.dispose());
 
-                for (let step = 0; step <= steps; step += 1) {
-                    const t = step / steps;
-                    const x = from.x + (to.x - from.x) * t;
-                    const z = from.z + (to.z - from.z) * t;
-                    // Le tube suit le relief, avec un léger arc au départ/arrivée.
-                    const arc = Math.sin(t * Math.PI) * linkRadius * 4;
-                    points.push(new THREE.Vector3(x, heightAt(x, z) + linkRadius * 2 + arc, z));
-                }
+            // --- Cycle jour/nuit & météo -------------------------------------
+            const dayNight = new DayNightCycle({
+                sky,
+                sun: sunLight,
+                moon: moonLight,
+                hemi,
+                fog,
+                renderer: webgl,
+                worldSize,
+            });
 
-                const curve = new THREE.CatmullRomCurve3(points);
-                const geometry = new THREE.TubeGeometry(curve, steps * 2, linkRadius, 6, false);
-                const tube = new THREE.Mesh(geometry, linkMaterial);
-                tube.userData = { kind: 'link', id: irrigation.id, row: irrigation };
-                linksGroup.add(tube);
-                disposables.push(() => geometry.dispose());
-            }
+            const weatherSystem = new WeatherSystem({
+                scene,
+                fog,
+                sun: sunLight,
+                hemi,
+                terrainMaterial,
+                worldSize,
+                profile: initialProfile,
+            });
+            weatherSystem.setWeather(weather);
+            disposers.push(() => weatherSystem.dispose());
 
             // --- Caméra & contrôles -----------------------------------------
             const overview = new THREE.Vector3(worldSize * 0.55, worldSize * 0.5, worldSize * 0.75);
@@ -633,7 +353,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             const pointerLock = new PointerLockControls(camera, webgl.domElement);
             pointerLock.enabled = false;
 
-            disposables.push(() => {
+            disposers.push(() => {
                 orbit.dispose();
                 pointerLock.dispose();
             });
@@ -642,43 +362,10 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             const onUnlock = () => setLocked(false);
             pointerLock.addEventListener('lock', onLock);
             pointerLock.addEventListener('unlock', onUnlock);
-            disposables.push(() => {
+            disposers.push(() => {
                 pointerLock.removeEventListener('lock', onLock);
                 pointerLock.removeEventListener('unlock', onUnlock);
             });
-
-            // --- Soleil ------------------------------------------------------
-            const applyHour = (value: number) => {
-                const t = (value - 6) / 12;
-                const elevation = Math.sin(THREE.MathUtils.clamp(t, 0, 1) * Math.PI) * 68 - 4;
-                const azimuth = 95 + t * 170;
-                const phi = THREE.MathUtils.degToRad(90 - elevation);
-                const theta = THREE.MathUtils.degToRad(azimuth);
-
-                sunDirection.setFromSphericalCoords(1, phi, theta);
-                skyMaterial.uniforms.sunPosition.value.copy(sunDirection);
-
-                const daylight = THREE.MathUtils.clamp(Math.sin(THREE.MathUtils.degToRad(Math.max(elevation, 0))), 0, 1);
-
-                sunLight.position.copy(sunDirection).multiplyScalar(worldSize * 2);
-                sunLight.target.position.set(0, 0, 0);
-                sunLight.intensity = 0.1 + daylight * 3.1;
-
-                const warm = new THREE.Color(0xffb066);
-                const noon = new THREE.Color(0xfff4e6);
-                sunLight.color.copy(warm).lerp(noon, daylight);
-
-                hemi.intensity = 0.12 + daylight * 0.75;
-
-                const night = new THREE.Color(0x0b1220);
-                const day = new THREE.Color(0xbfd8ea);
-                fog.color.copy(night).lerp(day, daylight);
-                fog.near = worldSize * 0.9;
-                fog.far = worldSize * 3.2;
-                webgl.setClearColor(fog.color);
-            };
-
-            applyHour(hour);
 
             // --- Interaction -------------------------------------------------
             const raycaster = new THREE.Raycaster();
@@ -709,7 +396,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             const pickAt = (ndcX: number, ndcY: number) => {
                 pointer.set(ndcX, ndcY);
                 raycaster.setFromCamera(pointer, camera);
-                const hits = raycaster.intersectObjects(pickTargets, false);
+                const hits = raycaster.intersectObjects(entities.pickTargets, false);
                 setSelectedMesh(hits.length ? (hits[0].object as THREE.Mesh) : null);
             };
 
@@ -760,7 +447,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             webgl.domElement.addEventListener('click', onClick);
             window.addEventListener('keydown', onKeyDown);
             window.addEventListener('keyup', onKeyUp);
-            disposables.push(() => {
+            disposers.push(() => {
                 webgl.domElement.removeEventListener('pointerdown', onPointerDown);
                 webgl.domElement.removeEventListener('pointerup', onPointerUp);
                 webgl.domElement.removeEventListener('click', onClick);
@@ -809,10 +496,23 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             };
 
             let frameCounter = 0;
+            let lastHourSync = 0;
 
             const animate = () => {
                 frame = requestAnimationFrame(animate);
                 const delta = Math.min(clock.getDelta(), 0.08);
+
+                dayNight.update(delta);
+                weatherSystem.update(delta, camera, dayNight);
+                waterSurfaces.update(delta, weatherSystem.rainIntensity, dayNight.daylight());
+                vegetation.update(delta, weatherSystem.wind, weatherSystem.rainIntensity);
+
+                const now = performance.now();
+                if (dayNight.playing && now - lastHourSync > HOUR_SYNC_MS) {
+                    lastHourSync = now;
+                    sceneHour.current = dayNight.hour;
+                    setHour(dayNight.hour);
+                }
 
                 if (modeRef.current === 'orbit') {
                     orbit.update();
@@ -824,7 +524,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                     frameCounter += 1;
                     if (frameCounter % 6 === 0 && target.current) {
                         raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-                        const hits = raycaster.intersectObjects(pickTargets, false);
+                        const hits = raycaster.intersectObjects(entities.pickTargets, false);
                         const hit = hits.length ? (hits[0].object.userData.row as ResourceRow) : null;
                         target.current.textContent = hit ? `${hit.code ?? ''} · ${hit.name ?? ''}` : '';
                     }
@@ -840,7 +540,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                 webgl.setSize(container.clientWidth, container.clientHeight);
             });
             observer.observe(container);
-            disposables.push(() => observer.disconnect());
+            disposers.push(() => observer.disconnect());
 
             // --- API exposée à l'interface ----------------------------------
             api.current = {
@@ -854,16 +554,38 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                     }
                     pointerLock.enabled = next !== 'orbit';
                 },
-                setHour: (value) => applyHour(value),
+                setHour: (value) => dayNight.setHour(value),
+                setDayLength: (seconds) => dayNight.setDayLength(seconds),
+                setWeather: (value) => weatherSystem.setWeather(value),
+                setQuality: (profile) => {
+                    webgl.setPixelRatio(Math.min(window.devicePixelRatio, profile.maxPixelRatio));
+                    webgl.setSize(container.clientWidth, container.clientHeight);
+
+                    sunLight.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
+                    sunLight.shadow.map?.dispose();
+                    sunLight.shadow.map = null;
+                    sunLight.castShadow = profile.shadows;
+                    sunLight.shadow.camera.updateProjectionMatrix();
+
+                    entities.plots.traverse((child) => {
+                        if (child instanceof THREE.Mesh) child.castShadow = profile.shadows;
+                    });
+
+                    vegetation.setQuality(profile);
+                    weatherSystem.setQuality(profile);
+                },
                 setVisibility: (next) => {
-                    if (next.plots !== undefined) plotsGroup.visible = next.plots;
-                    if (next.water !== undefined) waterGroup.visible = next.water;
-                    if (next.labels !== undefined) labelsGroup.visible = next.labels;
-                    if (next.terrain !== undefined) terrain.visible = next.terrain;
-                    if (next.links !== undefined) linksGroup.visible = next.links;
+                    if (next.plots !== undefined) entities.plots.visible = next.plots;
+                    if (next.water !== undefined) {
+                        entities.water.visible = next.water;
+                        waterSurfaces.visible = next.water;
+                    }
+                    if (next.labels !== undefined) entities.labels.visible = next.labels;
+                    if (next.terrain !== undefined) terrainMesh.visible = next.terrain;
+                    if (next.links !== undefined) entities.links.visible = next.links;
                 },
                 setStatusFilter: (filter) => {
-                    for (const child of plotsGroup.children) {
+                    for (const child of entities.plots.children) {
                         const status = String(child.userData?.status ?? '');
                         if (!status) continue;
                         const visible = filter[status] !== false;
@@ -875,7 +597,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                     }
                 },
                 focusOn: (id) => {
-                    const point = anchors.get(String(id));
+                    const point = entities.anchors.get(String(id));
                     if (!point) return;
 
                     if (modeRef.current !== 'orbit') {
@@ -904,13 +626,25 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             api.current.setMode(modeRef.current);
             api.current.setVisibility(visibility.current);
             api.current.setStatusFilter(statuses);
+            api.current.setWeather(weather);
+            api.current.setDayLength(DAY_LENGTHS.find((item) => item.id === dayLength)?.seconds ?? 600);
 
-            setStatus(tileset.hasImagery && tileset.hasElevation ? 'ready' : 'procedural');
-            setZoomLabel(`${tileset.center.lat.toFixed(4)}, ${tileset.center.lng.toFixed(4)} · z${tileset.zoom}`);
+            const origin: 'satellite' | 'relief' | 'procedural' = !hasGeo
+                ? 'procedural'
+                : terrain.hasImagery && terrain.hasElevation
+                  ? 'satellite'
+                  : 'relief';
+            setStatus('ready');
+            setSceneOrigin(origin);
+            setMapLabel(
+                origin === 'procedural'
+                    ? 'Terrain généré · positions estimées'
+                    : `${terrain.center.lat.toFixed(4)}, ${terrain.center.lng.toFixed(4)} · z${terrain.zoom}`,
+            );
 
             animate();
 
-            disposables.push(() => {
+            disposers.push(() => {
                 cancelAnimationFrame(frame);
                 api.current = null;
                 webgl.dispose();
@@ -926,21 +660,36 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
             disposeAll();
             api.current = null;
         };
-    }, [rows, waterSources, irrigations]);
+        // Le contenu des données est suivi par `dataKey` (voir ci-dessus).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dataKey]);
 
-    // Applique le mode courant aux contrôles recréés après un changement de données.
     useEffect(() => {
         modeRef.current = mode;
         api.current?.setMode(mode);
     }, [mode]);
 
     useEffect(() => {
+        if (sceneHour.current === hour) return;
         api.current?.setHour(hour);
     }, [hour]);
 
     useEffect(() => {
         api.current?.setStatusFilter(statuses);
     }, [statuses]);
+
+    useEffect(() => {
+        const option = DAY_LENGTHS.find((item) => item.id === dayLength);
+        api.current?.setDayLength(option?.seconds ?? 600);
+    }, [dayLength]);
+
+    useEffect(() => {
+        api.current?.setWeather(weather);
+    }, [weather]);
+
+    useEffect(() => {
+        api.current?.setQuality(QUALITY_PROFILES[quality]);
+    }, [quality]);
 
     const chooseMode = (next: NavMode) => {
         modeRef.current = next;
@@ -986,6 +735,29 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
         </button>
     );
 
+    const layerButton = (
+        key: 'plots' | 'water' | 'labels' | 'links',
+        label: string,
+        Icon: typeof Box,
+        active: boolean,
+        activeClass: string,
+    ) => (
+        <button
+            type="button"
+            onClick={() => toggle(key)}
+            title={active ? `Masquer ${label.toLowerCase()}` : `Afficher ${label.toLowerCase()}`}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium ${
+                active ? `${activeClass} text-white` : 'bg-white/85 text-ink-400'
+            }`}
+        >
+            <Icon aria-hidden="true" className="size-3.5" />
+            {label}
+        </button>
+    );
+
+    const totalMinutes = Math.round(hour * 60) % (24 * 60);
+    const timeLabel = `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+
     return (
         <div className="space-y-3">
             <div ref={wrapper} className="relative">
@@ -998,8 +770,8 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                     <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-slate-900/80 text-center text-sm text-white backdrop-blur">
                         <div className="space-y-2">
                             <Mountain aria-hidden="true" className="mx-auto size-8 animate-pulse text-brand-300" />
-                            <p className="font-semibold">Chargement du relief et de l’imagerie satellite…</p>
-                            <p className="text-xs text-white/60">Le terrain réel de l’exploitation est en cours de génération.</p>
+                            <p className="font-semibold">Chargement du relief et de l’environnement…</p>
+                            <p className="text-xs text-white/60">Terrain, végétation et météo sont en cours de génération.</p>
                         </div>
                     </div>
                 )}
@@ -1013,72 +785,82 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                 {status !== 'loading' && status !== 'error' && (
                     <>
                         {/* Barre d'outils */}
-                        <div className="absolute top-3 left-3 z-10 flex flex-col gap-2">
+                        <div className="absolute top-3 left-3 z-10 flex max-h-full flex-col gap-2 overflow-y-auto">
                             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-slate-900/60 p-2 backdrop-blur">
                                 {modeButton('orbit', 'Vue d’ensemble', Focus)}
                                 {modeButton('fly', 'Vol', Plane)}
                                 {modeButton('walk', 'Marche', Gamepad2)}
                             </div>
 
-                            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-white backdrop-blur">
-                                <Sun aria-hidden="true" className="size-4 text-amber-300" />
-                                <input
-                                    type="range"
-                                    min={0}
-                                    max={24}
-                                    step={0.25}
-                                    value={hour}
-                                    onChange={(event) => setHour(Number(event.target.value))}
-                                    className="h-1.5 w-40 accent-amber-400"
-                                    aria-label="Heure de la journée"
-                                />
-                                <span className="w-12 tabular-nums">
-                                    {String(Math.floor(hour)).padStart(2, '0')}:
-                                    {String(Math.round((hour % 1) * 60)).padStart(2, '0')}
-                                </span>
+                            {/* Cycle jour / nuit */}
+                            <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-white backdrop-blur">
+                                <div className="flex items-center gap-2">
+                                    <Sun aria-hidden="true" className="size-4 text-amber-300" />
+                                    <input
+                                        type="range"
+                                        min={0}
+                                        max={24}
+                                        step={0.25}
+                                        value={hour}
+                                        onChange={(event) => setHour(Number(event.target.value))}
+                                        className="h-1.5 w-40 accent-amber-400"
+                                        aria-label="Heure de la journée"
+                                    />
+                                    <span className="w-12 tabular-nums">{timeLabel}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setPlaying((current) => !current)}
+                                        className="rounded-lg bg-white/85 p-1.5 text-ink-700 hover:bg-white"
+                                        aria-label={playing ? 'Mettre le cycle en pause' : 'Démarrer le cycle'}
+                                    >
+                                        {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+                                    </button>
+                                </div>
+                                <label className="flex items-center gap-2 text-white/80">
+                                    <span className="w-28">Journée virtuelle</span>
+                                    <select
+                                        value={dayLength}
+                                        onChange={(event) => setDayLength(event.target.value)}
+                                        className="rounded-lg border border-white/15 bg-slate-900/80 px-2 py-1 text-xs text-white"
+                                        aria-label="Durée d’une journée virtuelle"
+                                    >
+                                        {DAY_LENGTHS.map((option) => (
+                                            <option key={option.id} value={option.id}>
+                                                {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
+
+                            {/* Météo */}
+                            <div className="flex flex-col gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
+                                <p className="flex items-center gap-1.5 px-1 font-semibold text-white/90">
+                                    <CloudRain aria-hidden="true" className="size-3.5" />
+                                    Météo simulée
+                                </p>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {WEATHERS.map((option) => (
+                                        <button
+                                            key={option.id}
+                                            type="button"
+                                            title={option.description}
+                                            onClick={() => setWeather(option.id)}
+                                            className={`rounded-lg px-2 py-1 font-medium ${
+                                                weather === option.id ? 'bg-sky-600 text-white' : 'bg-white/85 text-ink-700 hover:bg-white'
+                                            }`}
+                                        >
+                                            {option.label}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
 
                             <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
-                                <button
-                                    type="button"
-                                    onClick={() => toggle('plots')}
-                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium ${
-                                        showPlots ? 'bg-brand-600 text-white' : 'bg-white/85 text-ink-700'
-                                    }`}
-                                >
-                                    {showPlots ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
-                                    Parcelles
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => toggle('water')}
-                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium ${
-                                        showWater ? 'bg-sky-600 text-white' : 'bg-white/85 text-ink-700'
-                                    }`}
-                                >
-                                    <Droplets className="size-3.5" />
-                                    Eau
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => toggle('labels')}
-                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium ${
-                                        showLabels ? 'bg-brand-600 text-white' : 'bg-white/85 text-ink-700'
-                                    }`}
-                                >
-                                    <Box className="size-3.5" />
-                                    Étiquettes
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => toggle('links')}
-                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium ${
-                                        showLinks ? 'bg-sky-600 text-white' : 'bg-white/85 text-ink-700'
-                                    }`}
-                                >
-                                    <CloudRain className="size-3.5" />
-                                    Irrigations
-                                </button>
+                                {layerButton('plots', 'Parcelles', Box, showPlots, 'bg-brand-600')}
+                                {layerButton('water', 'Eau', Droplets, showWater, 'bg-sky-600')}
+                                {layerButton('labels', 'Étiquettes', Gauge, showLabels, 'bg-brand-600')}
+                                {layerButton('links', 'Irrigations', CloudRain, showLinks, 'bg-sky-600')}
                                 <button
                                     type="button"
                                     onClick={() => api.current?.resetView()}
@@ -1087,6 +869,29 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                                     <Focus className="size-3.5" />
                                     Recentrer
                                 </button>
+                            </div>
+
+                            {/* Qualité graphique */}
+                            <div className="flex flex-col gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
+                                <p className="flex items-center gap-1.5 px-1 font-semibold text-white/90">
+                                    <Gauge aria-hidden="true" className="size-3.5" />
+                                    Qualité
+                                </p>
+                                <div className="flex gap-1.5">
+                                    {(['basse', 'moyenne', 'haute'] as QualityLevel[]).map((level) => (
+                                        <button
+                                            key={level}
+                                            type="button"
+                                            title={QUALITY_PROFILES[level].description}
+                                            onClick={() => setQuality(level)}
+                                            className={`rounded-lg px-2 py-1 font-medium ${
+                                                quality === level ? 'bg-brand-600 text-white' : 'bg-white/85 text-ink-700 hover:bg-white'
+                                            }`}
+                                        >
+                                            {QUALITY_PROFILES[level].label}
+                                        </button>
+                                    ))}
+                                </div>
                             </div>
 
                             {/* Filtres par statut */}
@@ -1163,10 +968,21 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                             </ul>
                         </div>
 
-                        {/* Repère de localisation */}
-                        <div className="absolute right-3 bottom-3 z-10 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-right text-xs text-white/80 backdrop-blur">
-                            <p className="font-semibold text-white">Terrain réel</p>
-                            <p className="tabular-nums">{zoomLabel}</p>
+                        {/* Repère de localisation + honnêteté des positions */}
+                        <div className="absolute right-3 bottom-3 z-10 max-w-xs rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-right text-xs text-white/80 backdrop-blur">
+                            <p className="font-semibold text-white">
+                                {sceneOrigin === 'satellite'
+                                    ? 'Terrain réel (satellite + MNT)'
+                                    : sceneOrigin === 'relief'
+                                      ? 'Relief réel sans imagerie'
+                                      : 'Relief procédural'}
+                            </p>
+                            <p className="tabular-nums">{mapLabel}</p>
+                            <p className="mt-1 text-white/70">
+                                {located === total
+                                    ? `${total} entité${total > 1 ? 's' : ''} géolocalisée${total > 1 ? 's' : ''} depuis la base.`
+                                    : `${located} / ${total} entités géolocalisées · positions estimées pour les autres.`}
+                            </p>
                         </div>
 
                         {/* Astuces de navigation */}
@@ -1192,6 +1008,9 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                             {selected.kind === 'water'
                                 ? String(selected.row.name ?? '')
                                 : `${String(selected.row.code ?? '')} · ${String(selected.row.name ?? '')}`}
+                            <span className="ml-2 text-xs font-medium text-ink-400">
+                                #{String(selected.row.id)}
+                            </span>
                         </p>
                         <button
                             type="button"
@@ -1212,6 +1031,14 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                             />
                             <Detail label="Seuil critique" value={`${selected.row.critical_threshold ?? '—'} ${selected.row.unit ?? ''}`.trim()} />
                             <Detail label="Statut" value={humanize(String(selected.row.status ?? '—'))} />
+                            <Detail
+                                label="Position"
+                                value={
+                                    selected.row.latitude === null || selected.row.latitude === undefined
+                                        ? 'Estimée'
+                                        : `${String(selected.row.latitude)}, ${String(selected.row.longitude)}`
+                                }
+                            />
                         </dl>
                     ) : (
                         <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
@@ -1221,6 +1048,16 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                             <Detail
                                 label="Humidité"
                                 value={selected.row.soil_moisture === null || selected.row.soil_moisture === undefined ? '—' : `${selected.row.soil_moisture} %`}
+                            />
+                            <Detail label="Sol" value={String(selected.row.soil_type ?? '—')} />
+                            <Detail label="Emplacement" value={String(selected.row.location ?? '—')} />
+                            <Detail
+                                label="Position"
+                                value={
+                                    selected.row.latitude === null || selected.row.latitude === undefined
+                                        ? 'Estimée'
+                                        : `${String(selected.row.latitude)}, ${String(selected.row.longitude)}`
+                                }
                             />
                         </dl>
                     )}

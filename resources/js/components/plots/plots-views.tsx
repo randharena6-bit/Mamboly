@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 
 import type { ResourceRow } from '../../resources/types';
 import { fetchMapLayers } from './plots-data';
@@ -7,6 +7,9 @@ const PlotsMap = lazy(() => import('./plots-map').then((module) => ({ default: m
 const Plots3D = lazy(() => import('./plots-3d').then((module) => ({ default: module.Plots3D })));
 
 type Layers = { waterSources: ResourceRow[]; irrigations: ResourceRow[] };
+
+/** Actualisation périodique des couches (points d'eau, irrigations). */
+const LAYERS_REFRESH_MS = 60_000;
 
 function Loading() {
     return (
@@ -18,11 +21,40 @@ function Loading() {
 
 function useLayers(): Layers {
     const [layers, setLayers] = useState<Layers>({ waterSources: [], irrigations: [] });
+    const firstLoad = useRef(true);
 
     useEffect(() => {
-        void fetchMapLayers()
-            .then(setLayers)
-            .catch(() => setLayers({ waterSources: [], irrigations: [] }));
+        let cancelled = false;
+
+        const load = async () => {
+            try {
+                const next = await fetchMapLayers();
+                if (cancelled) return;
+
+                // Aucune reconstruction de scène si le contenu n'a pas bougé.
+                setLayers((previous) =>
+                    JSON.stringify([previous.waterSources, previous.irrigations]) ===
+                    JSON.stringify([next.waterSources, next.irrigations])
+                        ? previous
+                        : next,
+                );
+            } catch {
+                // On conserve la dernière réponse connue plutôt que de vider la scène.
+                if (firstLoad.current && !cancelled) {
+                    setLayers({ waterSources: [], irrigations: [] });
+                }
+            } finally {
+                firstLoad.current = false;
+            }
+        };
+
+        void load();
+        const timer = window.setInterval(() => void load(), LAYERS_REFRESH_MS);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+        };
     }, []);
 
     return layers;
