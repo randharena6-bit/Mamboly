@@ -1,41 +1,34 @@
 import {
-    Box,
-    CloudRain,
+    ChevronRight,
+    CircleDot,
+    Compass,
     Crosshair,
     Droplets,
-    Focus,
-    Gamepad2,
-    Gauge,
+    Footprints,
+    HelpCircle,
+    Keyboard,
+    Map as MapIcon,
     Maximize2,
     Minimize2,
-    Mountain,
+    Moon,
+    MousePointer2,
     Pause,
     Play,
-    Plane,
+    RotateCcw,
+    Sprout,
     Sun,
+    Tractor,
+    Waves,
+    Wheat,
+    X,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
-import { Sky } from 'three/examples/jsm/objects/Sky.js';
 
 import type { ResourceRow } from '../../resources/types';
 import { humanize } from '../app/status-badge';
-import { createProceduralTileset, loadTerrainTileset, type TerrainTileset } from './terrain';
-import { DayNightCycle, DAY_LENGTHS } from './scene/day-night';
-import {
-    buildEntities,
-    colorToHex,
-    locatedCount,
-    resolveEntityLocations,
-    STATUS_COLORS,
-    STATUS_LEGEND,
-} from './scene/entities';
-import { detectInitialQuality, QUALITY_PROFILES, type QualityLevel, type QualityProfile } from './scene/quality';
-import { Vegetation } from './scene/vegetation';
-import { WaterSurfaces } from './scene/water';
-import { WeatherSystem, WEATHERS, type WeatherId } from './scene/weather';
+import { STATUS } from './farm3d/core';
+import type { FarmMinimap, FarmSelection, ViewMode } from './farm3d/core';
+import { FarmWorld } from './farm3d/world';
 
 export type Plots3DProps = {
     rows: ResourceRow[];
@@ -43,1035 +36,598 @@ export type Plots3DProps = {
     irrigations?: ResourceRow[];
 };
 
-type NavMode = 'orbit' | 'fly' | 'walk';
-type Status = 'loading' | 'ready' | 'procedural' | 'error';
-type LayerKey = 'plots' | 'water' | 'labels' | 'links' | 'terrain';
+const MODES: Array<{
+    id: ViewMode;
+    label: string;
+    icon: typeof MapIcon;
+    description: string;
+    controls: string;
+}> = [
+    {
+        id: 'orbit',
+        label: 'Vue ferme',
+        icon: MapIcon,
+        description: 'Survol de l’exploitation',
+        controls: 'Glisser pour tourner · Molette pour zoomer',
+    },
+    {
+        id: 'walk',
+        label: 'Explorer',
+        icon: Footprints,
+        description: 'Marcher dans la ferme',
+        controls: 'ZQSD / WASD · Maj pour courir · Glisser pour la caméra',
+    },
+    {
+        id: 'drive',
+        label: 'Tracteur',
+        icon: Tractor,
+        description: 'Conduire le tracteur',
+        controls: 'W/S accélérer et reculer · A/D diriger · Espace freiner',
+    },
+];
 
-const RESOLUTION = 160;
-const VERTICAL_EXAGGERATION = 1.6;
-/** Actualisation du curseur d'heure pendant le cycle en cours. */
-const HOUR_SYNC_MS = 250;
+const STATUS_ITEMS = Object.entries(STATUS);
 
-type SceneApi = {
-    setMode: (mode: NavMode) => void;
-    setHour: (hour: number) => void;
-    setDayLength: (seconds: number) => void;
-    setWeather: (weather: WeatherId) => void;
-    setQuality: (profile: QualityProfile) => void;
-    setVisibility: (visibility: Partial<Record<LayerKey, boolean>>) => void;
-    setStatusFilter: (statuses: Record<string, boolean>) => void;
-    focusOn: (id: string | number) => void;
-    resetView: () => void;
-};
+function formatValue(value: unknown): string {
+    if (value === null || value === undefined || value === '') return '—';
+    return String(value);
+}
+
+function formatArea(row: ResourceRow): string {
+    const area = formatValue(row.area);
+    const unit = String(row.area_unit ?? '').replace('m2', 'm²');
+    return `${area} ${unit}`.trim();
+}
+
+function formatHour(hour: number): string {
+    const hours = Math.floor(hour) % 24;
+    const minutes = Math.floor((hour - Math.floor(hour)) * 60);
+
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function StatusDot({ color }: { color: string }) {
+    return <span className="inline-block size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />;
+}
 
 export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) {
-    const host = useRef<HTMLDivElement>(null);
-    const target = useRef<HTMLDivElement>(null);
     const wrapper = useRef<HTMLDivElement>(null);
-    const api = useRef<SceneApi | null>(null);
+    const canvas = useRef<HTMLCanvasElement>(null);
+    const world = useRef<FarmWorld | null>(null);
+    const modeRef = useRef<ViewMode>('orbit');
+    const autoTimeRef = useRef(true);
 
-    /** Signature des données : la scène n'est reconstruite que si elles changent. */
-    const dataKey = useMemo(() => JSON.stringify([rows, waterSources, irrigations]), [rows, waterSources, irrigations]);
     const dataRef = useRef({ rows, waterSources, irrigations });
     dataRef.current = { rows, waterSources, irrigations };
+    const dataKey = useMemo(
+        () => JSON.stringify([rows, waterSources, irrigations]),
+        [rows, waterSources, irrigations],
+    );
 
-    const [status, setStatus] = useState<Status>('loading');
-    const [sceneOrigin, setSceneOrigin] = useState<'satellite' | 'relief' | 'procedural'>('procedural');
-    const [mapLabel, setMapLabel] = useState('');
-    const [mode, setMode] = useState<NavMode>('orbit');
-    const [hour, setHour] = useState(14);
-    const [playing, setPlaying] = useState(false);
-    const [dayLength, setDayLength] = useState('10min');
-    const [weather, setWeather] = useState<WeatherId>('clair');
-    const [quality, setQuality] = useState<QualityLevel>(() => detectInitialQuality().id);
-    const [locked, setLocked] = useState(false);
-    const [showPlots, setShowPlots] = useState(true);
-    const [showWater, setShowWater] = useState(true);
-    const [showLabels, setShowLabels] = useState(true);
-    const [showLinks, setShowLinks] = useState(true);
+    const [ready, setReady] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const [mode, setMode] = useState<ViewMode>('orbit');
+    const [hour, setHour] = useState(15.5);
+    const [autoTime, setAutoTime] = useState(true);
+    const [selected, setSelected] = useState<FarmSelection>(null);
+    const [minimap, setMinimap] = useState<FarmMinimap | null>(null);
     const [fullscreen, setFullscreen] = useState(false);
-    const [statuses, setStatuses] = useState<Record<string, boolean>>({
-        disponible: true,
-        en_culture: true,
-        en_repos: true,
-        indisponible: true,
-    });
-    const [selected, setSelected] = useState<{ kind: 'plot' | 'water'; row: ResourceRow } | null>(null);
+    const [help, setHelp] = useState(false);
 
-    const visibility = useRef<Record<LayerKey, boolean>>({
-        plots: true,
-        water: true,
-        labels: true,
-        terrain: true,
-        links: true,
-    });
-    const modeRef = useRef<NavMode>('orbit');
-    const sceneHour = useRef<number | null>(null);
-
-    /** Entités réellement géolocalisées (le reste est explicitement estimé). */
-    const located = useMemo(() => locatedCount(rows, waterSources), [rows, waterSources]);
-    const total = rows.length + waterSources.length;
+    autoTimeRef.current = autoTime;
 
     useEffect(() => {
-        const container = host.current;
-        if (!container) return;
+        const element = canvas.current;
+        if (!element) return;
 
-        let disposed = false;
-        let frame = 0;
-        const disposers: Array<() => void> = [];
+        setReady(false);
+        setError(null);
+        setSelected(null);
 
-        const disposeAll = () => {
-            disposers.forEach((dispose) => dispose());
-            disposers.length = 0;
-        };
+        let instance: FarmWorld;
 
-        const boot = async () => {
-            let webgl: THREE.WebGLRenderer;
-
-            try {
-                webgl = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-            } catch {
-                setStatus('error');
-                return;
-            }
-
-            const initialProfile = QUALITY_PROFILES[quality] ?? detectInitialQuality();
-            webgl.setPixelRatio(Math.min(window.devicePixelRatio, initialProfile.maxPixelRatio));
-            webgl.setSize(container.clientWidth, container.clientHeight);
-            webgl.shadowMap.enabled = true;
-            webgl.shadowMap.type = THREE.PCFSoftShadowMap;
-            webgl.toneMapping = THREE.ACESFilmicToneMapping;
-            webgl.toneMappingExposure = 0.62;
-            webgl.outputColorSpace = THREE.SRGBColorSpace;
-            container.appendChild(webgl.domElement);
-
-            // Nettoyage précoce : si le composant est démonté pendant le
-            // chargement asynchrone des tuiles, le contexte WebGL ne fuit pas.
-            disposers.push(() => {
-                cancelAnimationFrame(frame);
-                api.current = null;
-                webgl.dispose();
-                webgl.domElement.remove();
+        try {
+            instance = new FarmWorld({
+                canvas: element,
+                rows: dataRef.current.rows,
+                waterSources: dataRef.current.waterSources,
+                irrigations: dataRef.current.irrigations,
+                onSelect: (next) => setSelected(next),
+                onTime: (next) => setHour(next),
+                onMinimap: (next) => setMinimap(next),
+                onReady: () => setReady(true),
             });
-
-            const scene = new THREE.Scene();
-            const camera = new THREE.PerspectiveCamera(
-                58,
-                Math.max(container.clientWidth, 1) / Math.max(container.clientHeight, 1),
-                0.5,
-                60000,
-            );
-
-            const sky = new Sky();
-            sky.scale.setScalar(30000);
-            scene.add(sky);
-
-            const skyMaterial = sky.material as THREE.ShaderMaterial;
-            skyMaterial.uniforms.turbidity.value = 8;
-            skyMaterial.uniforms.rayleigh.value = 2.2;
-            skyMaterial.uniforms.mieCoefficient.value = 0.005;
-            skyMaterial.uniforms.mieDirectionalG.value = 0.8;
-
-            const sunLight = new THREE.DirectionalLight(0xffffff, 3);
-            sunLight.castShadow = true;
-            sunLight.shadow.mapSize.set(initialProfile.shadowMapSize, initialProfile.shadowMapSize);
-            sunLight.shadow.bias = -0.0006;
-            sunLight.shadow.normalBias = 2;
-            scene.add(sunLight);
-            scene.add(sunLight.target);
-
-            const moonLight = new THREE.DirectionalLight(0x93b4ff, 0);
-            scene.add(moonLight);
-
-            const hemi = new THREE.HemisphereLight(0xbfd8ea, 0x3f3a2f, 0.7);
-            scene.add(hemi);
-
-            const fog = new THREE.Fog(0xbfd8ea, 1000, 6000);
-            scene.fog = fog;
-
-            const { rows: currentRows, waterSources: currentWater, irrigations: currentIrrigations } = dataRef.current;
-            const locations = resolveEntityLocations(currentRows, currentWater);
-            const hasGeo = locatedCount(currentRows, currentWater) > 0;
-
-            let tileset: TerrainTileset | null = null;
-            if (hasGeo) {
-                tileset = await loadTerrainTileset(locations.allPoints.length ? locations.allPoints : [locations.center]);
-            }
-            if (!tileset || (!tileset.hasImagery && !tileset.hasElevation)) {
-                tileset?.dispose();
-                tileset = createProceduralTileset();
-            }
-
-            const terrain = tileset;
-
-            if (disposed) {
-                terrain.dispose();
-                disposeAll();
-                webgl.dispose();
-                webgl.domElement.remove();
-                return;
-            }
-
-            const worldSize = terrain.worldSize;
-            const shadowCamera = sunLight.shadow.camera as THREE.OrthographicCamera;
-            shadowCamera.left = -worldSize * 0.9;
-            shadowCamera.right = worldSize * 0.9;
-            shadowCamera.top = worldSize * 0.9;
-            shadowCamera.bottom = -worldSize * 0.9;
-            shadowCamera.near = 1;
-            shadowCamera.far = worldSize * 6;
-            shadowCamera.updateProjectionMatrix();
-
-            const yOffset = -terrain.minElevation * VERTICAL_EXAGGERATION;
-            const heightAt = (x: number, z: number) =>
-                terrain.heightAt(x, z) * VERTICAL_EXAGGERATION + yOffset;
-
-            // --- Terrain -----------------------------------------------------
-            const groundTexture = terrain.colorTexture;
-
-            const columns = RESOLUTION + 1;
-            const vertexCount = columns * columns;
-            const positions = new Float32Array(vertexCount * 3);
-            const uvs = new Float32Array(vertexCount * 2);
-
-            for (let rowIndex = 0; rowIndex < columns; rowIndex += 1) {
-                for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
-                    const x = -worldSize / 2 + (columnIndex / RESOLUTION) * worldSize;
-                    const z = -worldSize / 2 + (rowIndex / RESOLUTION) * worldSize;
-                    const offset = (rowIndex * columns + columnIndex) * 3;
-
-                    positions[offset] = x;
-                    positions[offset + 1] = heightAt(x, z);
-                    positions[offset + 2] = z;
-
-                    const uvOffset = (rowIndex * columns + columnIndex) * 2;
-                    uvs[uvOffset] = columnIndex / RESOLUTION;
-                    uvs[uvOffset + 1] = 1 - rowIndex / RESOLUTION;
-                }
-            }
-
-            const indices: number[] = [];
-            for (let rowIndex = 0; rowIndex < RESOLUTION; rowIndex += 1) {
-                for (let columnIndex = 0; columnIndex < RESOLUTION; columnIndex += 1) {
-                    const a = rowIndex * columns + columnIndex;
-                    const b = a + 1;
-                    const c = a + columns;
-                    const d = c + 1;
-                    indices.push(a, c, b, b, c, d);
-                }
-            }
-
-            const terrainGeometry = new THREE.BufferGeometry();
-            terrainGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            terrainGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
-            terrainGeometry.setIndex(indices);
-            terrainGeometry.computeVertexNormals();
-
-            const terrainMaterial = new THREE.MeshStandardMaterial({
-                map: groundTexture,
-                roughness: 0.85,
-                metalness: 0,
-            });
-
-            const terrainMesh = new THREE.Mesh(terrainGeometry, terrainMaterial);
-            terrainMesh.receiveShadow = true;
-            scene.add(terrainMesh);
-
-            disposers.push(
-                () => terrainGeometry.dispose(),
-                () => terrainMaterial.dispose(),
-                () => groundTexture.dispose(),
-                () => terrain.dispose(),
-            );
-
-            // --- Entités métier (identifiants réels conservés) ---------------
-            const entities = buildEntities({
-                rows: currentRows,
-                waterSources: currentWater,
-                irrigations: currentIrrigations,
-                tileset: terrain,
-                heightAt,
-                disposers,
-            });
-
-            scene.add(entities.labels, entities.plots, entities.water, entities.links);
-
-            const waterSurfaces = new WaterSurfaces({
-                scene,
-                sources: entities.waterVisuals,
-                decor: terrain.decor,
-                heightAt,
-                worldSize,
-            });
-            disposers.push(() => waterSurfaces.dispose());
-
-            const vegetation = new Vegetation({
-                scene,
-                heightAt,
-                worldSize,
-                profile: initialProfile,
-                exclude: entities.exclude,
-            });
-            disposers.push(() => vegetation.dispose());
-
-            // --- Cycle jour/nuit & météo -------------------------------------
-            const dayNight = new DayNightCycle({
-                sky,
-                sun: sunLight,
-                moon: moonLight,
-                hemi,
-                fog,
-                renderer: webgl,
-                worldSize,
-            });
-
-            const weatherSystem = new WeatherSystem({
-                scene,
-                fog,
-                sun: sunLight,
-                hemi,
-                terrainMaterial,
-                worldSize,
-                profile: initialProfile,
-            });
-            weatherSystem.setWeather(weather);
-            disposers.push(() => weatherSystem.dispose());
-
-            // --- Caméra & contrôles -----------------------------------------
-            const overview = new THREE.Vector3(worldSize * 0.55, worldSize * 0.5, worldSize * 0.75);
-            camera.position.copy(overview);
-
-            const orbit = new OrbitControls(camera, webgl.domElement);
-            orbit.enableDamping = true;
-            orbit.dampingFactor = 0.08;
-            orbit.maxPolarAngle = Math.PI * 0.49;
-            orbit.minDistance = worldSize * 0.05;
-            orbit.maxDistance = worldSize * 4;
-            orbit.target.set(0, 0, 0);
-            orbit.update();
-
-            const pointerLock = new PointerLockControls(camera, webgl.domElement);
-            pointerLock.enabled = false;
-
-            disposers.push(() => {
-                orbit.dispose();
-                pointerLock.dispose();
-            });
-
-            const onLock = () => setLocked(true);
-            const onUnlock = () => setLocked(false);
-            pointerLock.addEventListener('lock', onLock);
-            pointerLock.addEventListener('unlock', onUnlock);
-            disposers.push(() => {
-                pointerLock.removeEventListener('lock', onLock);
-                pointerLock.removeEventListener('unlock', onUnlock);
-            });
-
-            // --- Interaction -------------------------------------------------
-            const raycaster = new THREE.Raycaster();
-            const pointer = new THREE.Vector2();
-            let selectedMesh: THREE.Mesh | null = null;
-            const pressed = new Set<string>();
-            const clock = new THREE.Clock();
-
-            const setSelectedMesh = (mesh: THREE.Mesh | null) => {
-                if (selectedMesh) {
-                    const previous = selectedMesh.material as THREE.MeshStandardMaterial;
-                    previous.emissiveIntensity = selectedMesh.userData.baseEmissive ?? 0.12;
-                }
-
-                selectedMesh = mesh;
-
-                if (mesh) {
-                    const material = mesh.material as THREE.MeshStandardMaterial;
-                    mesh.userData.baseEmissive = mesh.userData.baseEmissive ?? material.emissiveIntensity;
-                    material.emissiveIntensity = 0.85;
-                    const kind = mesh.userData.kind === 'water' ? 'water' : 'plot';
-                    setSelected({ kind, row: mesh.userData.row as ResourceRow });
-                } else {
-                    setSelected(null);
-                }
-            };
-
-            const pickAt = (ndcX: number, ndcY: number) => {
-                pointer.set(ndcX, ndcY);
-                raycaster.setFromCamera(pointer, camera);
-                const hits = raycaster.intersectObjects(entities.pickTargets, false);
-                setSelectedMesh(hits.length ? (hits[0].object as THREE.Mesh) : null);
-            };
-
-            let downX = 0;
-            let downY = 0;
-
-            const onPointerDown = (event: PointerEvent) => {
-                downX = event.clientX;
-                downY = event.clientY;
-            };
-
-            const onPointerUp = (event: PointerEvent) => {
-                const moved = Math.hypot(event.clientX - downX, event.clientY - downY);
-
-                if (modeRef.current !== 'orbit' || moved > 6) return;
-
-                const rect = webgl.domElement.getBoundingClientRect();
-                pickAt(
-                    ((event.clientX - rect.left) / rect.width) * 2 - 1,
-                    -((event.clientY - rect.top) / rect.height) * 2 + 1,
-                );
-            };
-
-            const onClick = () => {
-                if (modeRef.current !== 'orbit' && !pointerLock.isLocked) {
-                    pointerLock.lock();
-                }
-            };
-
-            const onKeyDown = (event: KeyboardEvent) => {
-                pressed.add(event.code);
-                if (modeRef.current !== 'orbit' && pointerLock.isLocked) {
-                    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) {
-                        event.preventDefault();
-                    }
-                    if (event.code === 'KeyE') {
-                        pickAt(0, 0);
-                    }
-                }
-            };
-
-            const onKeyUp = (event: KeyboardEvent) => {
-                pressed.delete(event.code);
-            };
-
-            webgl.domElement.addEventListener('pointerdown', onPointerDown);
-            webgl.domElement.addEventListener('pointerup', onPointerUp);
-            webgl.domElement.addEventListener('click', onClick);
-            window.addEventListener('keydown', onKeyDown);
-            window.addEventListener('keyup', onKeyUp);
-            disposers.push(() => {
-                webgl.domElement.removeEventListener('pointerdown', onPointerDown);
-                webgl.domElement.removeEventListener('pointerup', onPointerUp);
-                webgl.domElement.removeEventListener('click', onClick);
-                window.removeEventListener('keydown', onKeyDown);
-                window.removeEventListener('keyup', onKeyUp);
-            });
-
-            const forward = new THREE.Vector3();
-            const right = new THREE.Vector3();
-            const displacement = new THREE.Vector3();
-
-            const moveCamera = (delta: number) => {
-                const boost = pressed.has('ShiftLeft') || pressed.has('ShiftRight') ? 3 : 1;
-                const speed = 22 * boost;
-
-                forward.set(0, 0, -1).applyQuaternion(camera.quaternion);
-                right.set(1, 0, 0).applyQuaternion(camera.quaternion);
-                forward.y = 0;
-                right.y = 0;
-
-                if (forward.lengthSq() > 0) forward.normalize();
-                if (right.lengthSq() > 0) right.normalize();
-
-                displacement.set(0, 0, 0);
-
-                if (pressed.has('KeyW') || pressed.has('KeyZ') || pressed.has('ArrowUp')) displacement.add(forward);
-                if (pressed.has('KeyS') || pressed.has('ArrowDown')) displacement.sub(forward);
-                if (pressed.has('KeyD') || pressed.has('ArrowRight')) displacement.add(right);
-                if (pressed.has('KeyA') || pressed.has('KeyQ') || pressed.has('ArrowLeft')) displacement.sub(right);
-
-                if (displacement.lengthSq() > 0) {
-                    displacement.normalize().multiplyScalar(speed * delta);
-                    camera.position.add(displacement);
-                }
-
-                const walking = modeRef.current === 'walk';
-                const groundY = heightAt(camera.position.x, camera.position.z) + 1.9;
-
-                if (walking) {
-                    camera.position.y = groundY;
-                } else {
-                    if (pressed.has('Space')) camera.position.y += speed * delta;
-                    if (pressed.has('ControlLeft') || pressed.has('KeyC')) camera.position.y -= speed * delta;
-                    if (camera.position.y < groundY) camera.position.y = groundY;
-                }
-            };
-
-            let frameCounter = 0;
-            let lastHourSync = 0;
-
-            const animate = () => {
-                frame = requestAnimationFrame(animate);
-                const delta = Math.min(clock.getDelta(), 0.08);
-
-                dayNight.update(delta);
-                weatherSystem.update(delta, camera, dayNight);
-                waterSurfaces.update(delta, weatherSystem.rainIntensity, dayNight.daylight());
-                vegetation.update(delta, weatherSystem.wind, weatherSystem.rainIntensity);
-
-                const now = performance.now();
-                if (dayNight.playing && now - lastHourSync > HOUR_SYNC_MS) {
-                    lastHourSync = now;
-                    sceneHour.current = dayNight.hour;
-                    setHour(dayNight.hour);
-                }
-
-                if (modeRef.current === 'orbit') {
-                    orbit.update();
-                } else if (pointerLock.isLocked) {
-                    moveCamera(delta);
-                }
-
-                if (modeRef.current !== 'orbit') {
-                    frameCounter += 1;
-                    if (frameCounter % 6 === 0 && target.current) {
-                        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-                        const hits = raycaster.intersectObjects(entities.pickTargets, false);
-                        const hit = hits.length ? (hits[0].object.userData.row as ResourceRow) : null;
-                        target.current.textContent = hit ? `${hit.code ?? ''} · ${hit.name ?? ''}` : '';
-                    }
-                }
-
-                webgl.render(scene, camera);
-            };
-
-            const observer = new ResizeObserver(() => {
-                if (!container.clientWidth || !container.clientHeight) return;
-                camera.aspect = container.clientWidth / container.clientHeight;
-                camera.updateProjectionMatrix();
-                webgl.setSize(container.clientWidth, container.clientHeight);
-            });
-            observer.observe(container);
-            disposers.push(() => observer.disconnect());
-
-            // --- API exposée à l'interface ----------------------------------
-            api.current = {
-                setMode: (next) => {
-                    if (next === 'orbit') {
-                        pointerLock.unlock();
-                        orbit.enabled = true;
-                        orbit.update();
-                    } else {
-                        orbit.enabled = false;
-                    }
-                    pointerLock.enabled = next !== 'orbit';
-                },
-                setHour: (value) => dayNight.setHour(value),
-                setDayLength: (seconds) => dayNight.setDayLength(seconds),
-                setWeather: (value) => weatherSystem.setWeather(value),
-                setQuality: (profile) => {
-                    webgl.setPixelRatio(Math.min(window.devicePixelRatio, profile.maxPixelRatio));
-                    webgl.setSize(container.clientWidth, container.clientHeight);
-
-                    sunLight.shadow.mapSize.set(profile.shadowMapSize, profile.shadowMapSize);
-                    sunLight.shadow.map?.dispose();
-                    sunLight.shadow.map = null;
-                    sunLight.castShadow = profile.shadows;
-                    sunLight.shadow.camera.updateProjectionMatrix();
-
-                    entities.plots.traverse((child) => {
-                        if (child instanceof THREE.Mesh) child.castShadow = profile.shadows;
-                    });
-
-                    vegetation.setQuality(profile);
-                    weatherSystem.setQuality(profile);
-                },
-                setVisibility: (next) => {
-                    if (next.plots !== undefined) entities.plots.visible = next.plots;
-                    if (next.water !== undefined) {
-                        entities.water.visible = next.water;
-                        waterSurfaces.visible = next.water;
-                    }
-                    if (next.labels !== undefined) entities.labels.visible = next.labels;
-                    if (next.terrain !== undefined) terrainMesh.visible = next.terrain;
-                    if (next.links !== undefined) entities.links.visible = next.links;
-                },
-                setStatusFilter: (filter) => {
-                    for (const child of entities.plots.children) {
-                        const status = String(child.userData?.status ?? '');
-                        if (!status) continue;
-                        const visible = filter[status] !== false;
-                        child.visible = visible;
-                        const label = child.userData?.label as THREE.Sprite | undefined;
-                        if (label) label.visible = visible;
-                        const outline = child.userData?.outline as THREE.Object3D | undefined;
-                        if (outline) outline.visible = visible;
-                    }
-                },
-                focusOn: (id) => {
-                    const point = entities.anchors.get(String(id));
-                    if (!point) return;
-
-                    if (modeRef.current !== 'orbit') {
-                        modeRef.current = 'orbit';
-                        setMode('orbit');
-                        api.current?.setMode('orbit');
-                    }
-
-                    const distance = worldSize * 0.12;
-                    orbit.target.copy(point);
-                    camera.position.set(
-                        point.x + distance * 0.7,
-                        point.y + distance * 0.55,
-                        point.z + distance * 0.7,
-                    );
-                    orbit.update();
-                },
-                resetView: () => {
-                    camera.position.copy(overview);
-                    orbit.target.set(0, 0, 0);
-                    orbit.update();
-                    setSelectedMesh(null);
-                },
-            };
-
-            api.current.setMode(modeRef.current);
-            api.current.setVisibility(visibility.current);
-            api.current.setStatusFilter(statuses);
-            api.current.setWeather(weather);
-            api.current.setDayLength(DAY_LENGTHS.find((item) => item.id === dayLength)?.seconds ?? 600);
-
-            const origin: 'satellite' | 'relief' | 'procedural' = !hasGeo
-                ? 'procedural'
-                : terrain.hasImagery && terrain.hasElevation
-                  ? 'satellite'
-                  : 'relief';
-            setStatus('ready');
-            setSceneOrigin(origin);
-            setMapLabel(
-                origin === 'procedural'
-                    ? 'Terrain généré · positions estimées'
-                    : `${terrain.center.lat.toFixed(4)}, ${terrain.center.lng.toFixed(4)} · z${terrain.zoom}`,
-            );
-
-            animate();
-
-            disposers.push(() => {
-                cancelAnimationFrame(frame);
-                api.current = null;
-                webgl.dispose();
-                webgl.domElement.remove();
-            });
-        };
-
-        void boot();
+        } catch {
+            setError('Impossible de démarrer la scène 3D. Vérifiez que WebGL est activé dans votre navigateur.');
+            return;
+        }
+
+        world.current = instance;
+        instance.setMode(modeRef.current);
+        instance.setAutoTime(autoTimeRef.current);
 
         return () => {
-            disposed = true;
-            cancelAnimationFrame(frame);
-            disposeAll();
-            api.current = null;
+            instance.dispose();
+            world.current = null;
         };
-        // Le contenu des données est suivi par `dataKey` (voir ci-dessus).
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [dataKey]);
 
     useEffect(() => {
-        modeRef.current = mode;
-        api.current?.setMode(mode);
-    }, [mode]);
+        const onChange = () => setFullscreen(Boolean(document.fullscreenElement));
+        document.addEventListener('fullscreenchange', onChange);
 
-    useEffect(() => {
-        if (sceneHour.current === hour) return;
-        api.current?.setHour(hour);
-    }, [hour]);
+        return () => document.removeEventListener('fullscreenchange', onChange);
+    }, []);
 
-    useEffect(() => {
-        api.current?.setStatusFilter(statuses);
-    }, [statuses]);
-
-    useEffect(() => {
-        const option = DAY_LENGTHS.find((item) => item.id === dayLength);
-        api.current?.setDayLength(option?.seconds ?? 600);
-    }, [dayLength]);
-
-    useEffect(() => {
-        api.current?.setWeather(weather);
-    }, [weather]);
-
-    useEffect(() => {
-        api.current?.setQuality(QUALITY_PROFILES[quality]);
-    }, [quality]);
-
-    const chooseMode = (next: NavMode) => {
+    const activeMode = MODES.find((entry) => entry.id === mode) ?? MODES[0];
+    const located = rows.filter((row) => Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude))).length;
+    const changeMode = (next: ViewMode) => {
         modeRef.current = next;
         setMode(next);
-        setLocked(false);
+        world.current?.setMode(next);
     };
 
-    const toggle = (key: 'plots' | 'water' | 'labels' | 'links') => {
-        const current = key === 'plots' ? showPlots : key === 'water' ? showWater : key === 'labels' ? showLabels : showLinks;
-        const nextValue = !current;
+    const toggleTime = () => {
+        const next = !autoTime;
+        autoTimeRef.current = next;
+        setAutoTime(next);
+        world.current?.setAutoTime(next);
+    };
 
-        if (key === 'plots') setShowPlots(nextValue);
-        if (key === 'water') setShowWater(nextValue);
-        if (key === 'labels') setShowLabels(nextValue);
-        if (key === 'links') setShowLinks(nextValue);
+    const reset = () => {
+        modeRef.current = 'orbit';
+        setMode('orbit');
+        world.current?.resetView();
+    };
 
-        visibility.current[key] = nextValue;
-        api.current?.setVisibility({ [key]: nextValue });
+    const focus = () => {
+        if (!selected) return;
+        modeRef.current = 'orbit';
+        setMode('orbit');
+        world.current?.focusSelection(selected.kind, String(selected.row.id));
     };
 
     const toggleFullscreen = async () => {
-        if (!wrapper.current) return;
-
-        if (document.fullscreenElement) {
-            await document.exitFullscreen();
-            setFullscreen(false);
-        } else {
-            await wrapper.current.requestFullscreen();
-            setFullscreen(true);
+        try {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+            } else {
+                await wrapper.current?.requestFullscreen();
+            }
+        } catch {
+            // Le plein écran peut être refusé par le navigateur.
         }
     };
 
-    const modeButton = (value: NavMode, label: string, Icon: typeof Gamepad2) => (
-        <button
-            type="button"
-            onClick={() => chooseMode(value)}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition ${
-                mode === value ? 'bg-brand-600 text-white' : 'bg-white/85 text-ink-700 hover:bg-white'
-            }`}
-        >
-            <Icon aria-hidden="true" className="size-3.5" />
-            {label}
-        </button>
-    );
-
-    const layerButton = (
-        key: 'plots' | 'water' | 'labels' | 'links',
-        label: string,
-        Icon: typeof Box,
-        active: boolean,
-        activeClass: string,
-    ) => (
-        <button
-            type="button"
-            onClick={() => toggle(key)}
-            title={active ? `Masquer ${label.toLowerCase()}` : `Afficher ${label.toLowerCase()}`}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 font-medium ${
-                active ? `${activeClass} text-white` : 'bg-white/85 text-ink-400'
-            }`}
-        >
-            <Icon aria-hidden="true" className="size-3.5" />
-            {label}
-        </button>
-    );
-
-    const totalMinutes = Math.round(hour * 60) % (24 * 60);
-    const timeLabel = `${String(Math.floor(totalMinutes / 60)).padStart(2, '0')}:${String(totalMinutes % 60).padStart(2, '0')}`;
+    const closeSelection = () => {
+        setSelected(null);
+        world.current?.clearSelection();
+    };
 
     return (
-        <div className="space-y-3">
-            <div ref={wrapper} className="relative">
-                <div
-                    ref={host}
-                    className={fullscreen ? 'h-screen w-full' : 'h-[620px] w-full overflow-hidden rounded-2xl border border-ink-100 bg-slate-900'}
-                />
+        <div
+            ref={wrapper}
+            className={`relative overflow-hidden bg-[#0b1220] shadow-[0_30px_80px_-30px_rgba(15,23,42,0.75)] ${
+                fullscreen
+                    ? 'h-screen min-h-0 rounded-none border-0'
+                    : 'h-[calc(100dvh-11rem)] min-h-[600px] rounded-3xl border border-slate-700/60'
+            }`}
+        >
+            <canvas ref={canvas} className="absolute inset-0 h-full w-full touch-none outline-none" />
 
-                {status === 'loading' && (
-                    <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-slate-900/80 text-center text-sm text-white backdrop-blur">
-                        <div className="space-y-2">
-                            <Mountain aria-hidden="true" className="mx-auto size-8 animate-pulse text-brand-300" />
-                            <p className="font-semibold">Chargement du relief et de l’environnement…</p>
-                            <p className="text-xs text-white/60">Terrain, végétation et météo sont en cours de génération.</p>
+            {!ready && !error && (
+                <div className="absolute inset-0 z-30 grid place-items-center bg-[#0b1220]">
+                    <div className="flex flex-col items-center gap-4 text-center">
+                        <span className="grid size-14 place-items-center rounded-2xl border border-emerald-400/30 bg-emerald-500/10">
+                            <Wheat className="size-7 animate-pulse text-emerald-300" />
+                        </span>
+                        <div>
+                            <p className="font-display text-lg font-semibold text-white">Préparation de la ferme</p>
+                            <p className="mt-1 text-sm text-slate-400">Terrain, cultures, bâtiments et tracteur…</p>
                         </div>
                     </div>
-                )}
+                </div>
+            )}
 
-                {status === 'error' && (
-                    <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-slate-900/90 text-center text-sm text-white">
-                        <p>WebGL n’est pas disponible sur cet appareil — la vue 3D est désactivée.</p>
+            {error && (
+                <div className="absolute inset-0 z-30 grid place-items-center bg-[#0b1220] p-6">
+                    <div className="max-w-md rounded-2xl border border-rose-400/30 bg-rose-500/10 p-6 text-center">
+                        <p className="font-display text-lg font-semibold text-white">Scène 3D indisponible</p>
+                        <p className="mt-2 text-sm text-rose-100/80">{error}</p>
                     </div>
-                )}
+                </div>
+            )}
 
-                {status !== 'loading' && status !== 'error' && (
-                    <>
-                        {/* Barre d'outils */}
-                        <div className="absolute top-3 left-3 z-10 flex max-h-full flex-col gap-2 overflow-y-auto">
-                            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-slate-900/60 p-2 backdrop-blur">
-                                {modeButton('orbit', 'Vue d’ensemble', Focus)}
-                                {modeButton('fly', 'Vol', Plane)}
-                                {modeButton('walk', 'Marche', Gamepad2)}
-                            </div>
+            {/* Barre supérieure */}
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-3 p-3 sm:p-4">
+                <div className="pointer-events-auto hidden min-w-0 items-center gap-3 rounded-2xl border border-white/15 bg-slate-950/70 px-3 py-2.5 shadow-xl backdrop-blur-xl sm:flex">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-emerald-400/30 bg-emerald-500/15">
+                        <Wheat className="size-5 text-emerald-300" />
+                    </span>
+                    <div className="min-w-0">
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">Ferme AgriWater</p>
+                        <p className="truncate font-display text-sm font-semibold text-white">Vallée des parcelles</p>
+                    </div>
+                    <span className="hidden shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/70 sm:inline">
+                        {rows.length} parcelle{rows.length > 1 ? 's' : ''}
+                    </span>
+                </div>
 
-                            {/* Cycle jour / nuit */}
-                            <div className="flex flex-col gap-2 rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-xs text-white backdrop-blur">
-                                <div className="flex items-center gap-2">
-                                    <Sun aria-hidden="true" className="size-4 text-amber-300" />
-                                    <input
-                                        type="range"
-                                        min={0}
-                                        max={24}
-                                        step={0.25}
-                                        value={hour}
-                                        onChange={(event) => setHour(Number(event.target.value))}
-                                        className="h-1.5 w-40 accent-amber-400"
-                                        aria-label="Heure de la journée"
-                                    />
-                                    <span className="w-12 tabular-nums">{timeLabel}</span>
-                                    <button
-                                        type="button"
-                                        onClick={() => setPlaying((current) => !current)}
-                                        className="rounded-lg bg-white/85 p-1.5 text-ink-700 hover:bg-white"
-                                        aria-label={playing ? 'Mettre le cycle en pause' : 'Démarrer le cycle'}
-                                    >
-                                        {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-                                    </button>
-                                </div>
-                                <label className="flex items-center gap-2 text-white/80">
-                                    <span className="w-28">Journée virtuelle</span>
-                                    <select
-                                        value={dayLength}
-                                        onChange={(event) => setDayLength(event.target.value)}
-                                        className="rounded-lg border border-white/15 bg-slate-900/80 px-2 py-1 text-xs text-white"
-                                        aria-label="Durée d’une journée virtuelle"
-                                    >
-                                        {DAY_LENGTHS.map((option) => (
-                                            <option key={option.id} value={option.id}>
-                                                {option.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </label>
-                            </div>
-
-                            {/* Météo */}
-                            <div className="flex flex-col gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
-                                <p className="flex items-center gap-1.5 px-1 font-semibold text-white/90">
-                                    <CloudRain aria-hidden="true" className="size-3.5" />
-                                    Météo simulée
-                                </p>
-                                <div className="flex flex-wrap gap-1.5">
-                                    {WEATHERS.map((option) => (
-                                        <button
-                                            key={option.id}
-                                            type="button"
-                                            title={option.description}
-                                            onClick={() => setWeather(option.id)}
-                                            className={`rounded-lg px-2 py-1 font-medium ${
-                                                weather === option.id ? 'bg-sky-600 text-white' : 'bg-white/85 text-ink-700 hover:bg-white'
-                                            }`}
-                                        >
-                                            {option.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
-                                {layerButton('plots', 'Parcelles', Box, showPlots, 'bg-brand-600')}
-                                {layerButton('water', 'Eau', Droplets, showWater, 'bg-sky-600')}
-                                {layerButton('labels', 'Étiquettes', Gauge, showLabels, 'bg-brand-600')}
-                                {layerButton('links', 'Irrigations', CloudRain, showLinks, 'bg-sky-600')}
-                                <button
-                                    type="button"
-                                    onClick={() => api.current?.resetView()}
-                                    className="inline-flex items-center gap-1.5 rounded-lg bg-white/85 px-2 py-1 font-medium text-ink-700 hover:bg-white"
-                                >
-                                    <Focus className="size-3.5" />
-                                    Recentrer
-                                </button>
-                            </div>
-
-                            {/* Qualité graphique */}
-                            <div className="flex flex-col gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
-                                <p className="flex items-center gap-1.5 px-1 font-semibold text-white/90">
-                                    <Gauge aria-hidden="true" className="size-3.5" />
-                                    Qualité
-                                </p>
-                                <div className="flex gap-1.5">
-                                    {(['basse', 'moyenne', 'haute'] as QualityLevel[]).map((level) => (
-                                        <button
-                                            key={level}
-                                            type="button"
-                                            title={QUALITY_PROFILES[level].description}
-                                            onClick={() => setQuality(level)}
-                                            className={`rounded-lg px-2 py-1 font-medium ${
-                                                quality === level ? 'bg-brand-600 text-white' : 'bg-white/85 text-ink-700 hover:bg-white'
-                                            }`}
-                                        >
-                                            {QUALITY_PROFILES[level].label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* Filtres par statut */}
-                            <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-white/10 bg-slate-900/60 p-2 text-xs backdrop-blur">
-                                {STATUS_LEGEND.map((item) => (
-                                    <label
-                                        key={item.key}
-                                        className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-white/85 px-2 py-1 font-medium text-ink-700"
-                                    >
-                                        <input
-                                            type="checkbox"
-                                            checked={statuses[item.key] !== false}
-                                            onChange={(event) =>
-                                                setStatuses((current) => ({ ...current, [item.key]: event.target.checked }))
-                                            }
-                                            className="accent-brand-600"
-                                        />
-                                        <span
-                                            className="inline-block size-2.5 rounded-full"
-                                            style={{ backgroundColor: colorToHex(STATUS_COLORS[item.key] ?? 0x64748b) }}
-                                        />
-                                        {item.label}
-                                    </label>
-                                ))}
-                            </div>
+                <div className="pointer-events-auto flex items-center gap-2">
+                    <div className="flex items-center gap-1 rounded-2xl border border-white/15 bg-slate-950/70 p-1 shadow-xl backdrop-blur-xl">
+                        <span className="grid size-9 place-items-center text-amber-300">
+                            {hour >= 6 && hour < 19 ? <Sun className="size-4" /> : <Moon className="size-4" />}
+                        </span>
+                        <div className="min-w-[3.4rem] px-1 text-center">
+                            <p className="font-mono text-sm font-semibold tabular-nums text-white">{formatHour(hour)}</p>
+                            <p className="text-[9px] uppercase tracking-wider text-white/40">Journée</p>
                         </div>
-
-                        {/* Plein écran */}
-                        <div className="absolute top-3 right-3 z-10 flex flex-col gap-2">
-                            <button
-                                type="button"
-                                onClick={() => void toggleFullscreen()}
-                                className="rounded-lg border border-white/10 bg-slate-900/60 p-2 text-white backdrop-blur hover:bg-slate-900/80"
-                                aria-label={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
-                            >
-                                {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-                            </button>
-                        </div>
-
-                        {/* Réticule en navigation */}
-                        {mode !== 'orbit' && (
-                            <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
-                                <div className="flex flex-col items-center gap-3">
-                                    <span className="size-2.5 rounded-full border border-white/80 bg-white/20" />
-                                    <div
-                                        ref={target}
-                                        className="rounded-md bg-slate-900/70 px-2 py-0.5 text-xs font-medium text-white"
-                                    />
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Légende */}
-                        <div className="absolute bottom-3 left-3 z-10 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-white backdrop-blur">
-                            <p className="mb-1 font-semibold">Légende</p>
-                            <ul className="space-y-0.5">
-                                {STATUS_LEGEND.map((item) => (
-                                    <li key={item.key} className="flex items-center gap-2 text-white/80">
-                                        <span
-                                            className="inline-block size-3 rounded-full"
-                                            style={{ backgroundColor: colorToHex(STATUS_COLORS[item.key] ?? 0x64748b) }}
-                                        />
-                                        {item.label}
-                                    </li>
-                                ))}
-                                <li className="flex items-center gap-2 text-white/80">
-                                    <span className="inline-block size-3 rounded-full bg-sky-400" />
-                                    Point d’eau
-                                </li>
-                                <li className="flex items-center gap-2 text-white/80">
-                                    <span className="inline-block h-0.5 w-3 rounded bg-sky-300" />
-                                    Lien d’irrigation
-                                </li>
-                            </ul>
-                        </div>
-
-                        {/* Repère de localisation + honnêteté des positions */}
-                        <div className="absolute right-3 bottom-3 z-10 max-w-xs rounded-xl border border-white/10 bg-slate-900/60 px-3 py-2 text-right text-xs text-white/80 backdrop-blur">
-                            <p className="font-semibold text-white">
-                                {sceneOrigin === 'satellite'
-                                    ? 'Terrain réel (satellite + MNT)'
-                                    : sceneOrigin === 'relief'
-                                      ? 'Relief réel sans imagerie'
-                                      : 'Relief procédural'}
-                            </p>
-                            <p className="tabular-nums">{mapLabel}</p>
-                            <p className="mt-1 text-white/70">
-                                {located === total
-                                    ? `${total} entité${total > 1 ? 's' : ''} géolocalisée${total > 1 ? 's' : ''} depuis la base.`
-                                    : `${located} / ${total} entités géolocalisées · positions estimées pour les autres.`}
-                            </p>
-                        </div>
-
-                        {/* Astuces de navigation */}
-                        {mode !== 'orbit' && !locked && (
-                            <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
-                                <div className="rounded-xl border border-white/15 bg-slate-900/80 px-5 py-3 text-center text-sm text-white backdrop-blur">
-                                    <p className="font-semibold">Cliquez pour entrer en navigation</p>
-                                    <p className="mt-1 text-xs text-white/70">
-                                        ZQSD / WASD pour se déplacer · Souris pour regarder · Échap pour sortir
-                                    </p>
-                                </div>
-                            </div>
-                        )}
-                    </>
-                )}
-            </div>
-
-            {/* Panneau de sélection */}
-            {selected && (
-                <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-soft">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-display text-base font-bold text-ink-900">
-                            {selected.kind === 'water'
-                                ? String(selected.row.name ?? '')
-                                : `${String(selected.row.code ?? '')} · ${String(selected.row.name ?? '')}`}
-                            <span className="ml-2 text-xs font-medium text-ink-400">
-                                #{String(selected.row.id)}
-                            </span>
-                        </p>
                         <button
                             type="button"
-                            onClick={() => api.current?.focusOn(selected.row.id as string | number)}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
+                            onClick={toggleTime}
+                            className="grid size-9 place-items-center rounded-xl text-white/70 transition hover:bg-white/10 hover:text-white"
+                            aria-label={autoTime ? 'Mettre le temps en pause' : 'Relancer le cycle jour/nuit'}
+                            title={autoTime ? 'Mettre le temps en pause' : 'Relancer le cycle jour/nuit'}
                         >
-                            <Crosshair className="size-3.5" />
-                            Centrer
+                            {autoTime ? <Pause className="size-4" /> : <Play className="size-4" />}
                         </button>
                     </div>
 
-                    {selected.kind === 'water' ? (
-                        <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                            <Detail label="Type" value={humanize(String(selected.row.type ?? '—'))} />
-                            <Detail
-                                label="Quantité"
-                                value={`${selected.row.available_quantity ?? 0} / ${selected.row.capacity ?? 0} ${selected.row.unit ?? ''}`.trim()}
-                            />
-                            <Detail label="Seuil critique" value={`${selected.row.critical_threshold ?? '—'} ${selected.row.unit ?? ''}`.trim()} />
-                            <Detail label="Statut" value={humanize(String(selected.row.status ?? '—'))} />
-                            <Detail
-                                label="Position"
-                                value={
-                                    selected.row.latitude === null || selected.row.latitude === undefined
-                                        ? 'Estimée'
-                                        : `${String(selected.row.latitude)}, ${String(selected.row.longitude)}`
-                                }
-                            />
-                        </dl>
+                    <div className="flex items-center gap-1 rounded-2xl border border-white/15 bg-slate-950/70 p-1 shadow-xl backdrop-blur-xl">
+                        <button
+                            type="button"
+                            onClick={reset}
+                            className="grid size-9 place-items-center rounded-xl text-white/70 transition hover:bg-white/10 hover:text-white"
+                            aria-label="Recentrer la caméra"
+                            title="Recentrer"
+                        >
+                            <RotateCcw className="size-4" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setHelp(true)}
+                            className="grid size-9 place-items-center rounded-xl text-white/70 transition hover:bg-white/10 hover:text-white"
+                            aria-label="Afficher les commandes"
+                            title="Commandes"
+                        >
+                            <HelpCircle className="size-4" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void toggleFullscreen()}
+                            className="grid size-9 place-items-center rounded-xl text-white/70 transition hover:bg-white/10 hover:text-white"
+                            aria-label={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+                            title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+                        >
+                            {fullscreen ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* Sélection / tableau de bord */}
+            <div className="pointer-events-none absolute top-20 right-3 z-20 w-[21rem] max-w-[calc(100%-1.5rem)] sm:top-24">
+                <div className="pointer-events-auto overflow-hidden rounded-2xl border border-white/15 bg-slate-950/72 text-white shadow-2xl backdrop-blur-xl">
+                    {selected ? (
+                        <SelectionPanel selection={selected} onClose={closeSelection} onFocus={focus} />
                     ) : (
-                        <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-                            <Detail label="Statut" value={humanize(String(selected.row.status ?? '—'))} />
-                            <Detail label="Surface" value={`${selected.row.area ?? '—'} ${selected.row.area_unit ?? ''}`.trim()} />
-                            <Detail label="Priorité" value={humanize(String(selected.row.manual_priority ?? '—'))} />
-                            <Detail
-                                label="Humidité"
-                                value={selected.row.soil_moisture === null || selected.row.soil_moisture === undefined ? '—' : `${selected.row.soil_moisture} %`}
-                            />
-                            <Detail label="Sol" value={String(selected.row.soil_type ?? '—')} />
-                            <Detail label="Emplacement" value={String(selected.row.location ?? '—')} />
-                            <Detail
-                                label="Position"
-                                value={
-                                    selected.row.latitude === null || selected.row.latitude === undefined
-                                        ? 'Estimée'
-                                        : `${String(selected.row.latitude)}, ${String(selected.row.longitude)}`
-                                }
-                            />
-                        </dl>
+                        <div className="p-4">
+                            <div className="flex items-center justify-between gap-2">
+                                <div>
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">Exploitation</p>
+                                    <p className="font-display text-base font-semibold">Carte de la ferme</p>
+                                </div>
+                                <span className="grid size-9 place-items-center rounded-xl border border-white/10 bg-white/5 text-emerald-300">
+                                    <Compass className="size-4" />
+                                </span>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-2 gap-2">
+                                <Metric icon={Sprout} label="Parcelles" value={String(rows.length)} />
+                                <Metric icon={Droplets} label="Points d’eau" value={String(waterSources.length)} />
+                                <Metric icon={Waves} label="Irrigations" value={String(irrigations.length)} />
+                                <Metric icon={Crosshair} label="Géolocalisées" value={`${located}/${rows.length}`} />
+                            </div>
+
+                            <div className="mt-4 border-t border-white/10 pt-3">
+                                <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">Statut des parcelles</p>
+                                <ul className="grid grid-cols-2 gap-1.5">
+                                    {STATUS_ITEMS.map(([key, meta]) => (
+                                        <li key={key} className="flex items-center gap-2 text-xs text-white/70">
+                                            <StatusDot color={meta.css} />
+                                            {meta.label}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            <div className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-400/20 bg-emerald-500/10 px-3 py-2.5 text-xs text-emerald-100/80">
+                                <MousePointer2 className="mt-0.5 size-4 shrink-0" />
+                                <p>Cliquez sur un champ ou un réservoir pour explorer les données de l’exploitation.</p>
+                            </div>
+                        </div>
                     )}
+                </div>
+            </div>
+
+            {/* Modes */}
+            <div className="pointer-events-auto absolute bottom-3 left-3 z-20 flex gap-1 rounded-2xl border border-white/15 bg-slate-950/72 p-1.5 shadow-2xl backdrop-blur-xl">
+                {MODES.map((entry) => {
+                    const Icon = entry.icon;
+                    const active = entry.id === mode;
+
+                    return (
+                        <button
+                            key={entry.id}
+                            type="button"
+                            onClick={() => changeMode(entry.id)}
+                            className={`flex items-center gap-2 rounded-xl px-2.5 py-2 text-left transition sm:px-3 ${
+                                active ? 'bg-emerald-500 text-emerald-950 shadow-lg' : 'text-white/65 hover:bg-white/10 hover:text-white'
+                            }`}
+                            title={entry.description}
+                        >
+                            <Icon className="size-4 shrink-0" />
+                            <span className="hidden text-xs font-semibold sm:block">{entry.label}</span>
+                        </button>
+                    );
+                })}
+            </div>
+
+            {/* Aide contextuelle */}
+            <div className="pointer-events-none absolute bottom-4 left-1/2 z-10 hidden -translate-x-1/2 md:block">
+                <div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/55 px-3 py-1.5 text-[11px] text-white/60 backdrop-blur">
+                    <Keyboard className="size-3.5" />
+                    {activeMode.controls}
+                </div>
+            </div>
+
+            {/* Mini-carte */}
+            {minimap && <Minimap data={minimap} mode={mode} />}
+
+            {/* Commandes */}
+            {help && (
+                <div className="absolute inset-0 z-30 grid place-items-center bg-slate-950/65 p-4 backdrop-blur-sm">
+                    <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-white/15 bg-slate-900 text-white shadow-2xl">
+                        <div className="flex items-start justify-between gap-3 border-b border-white/10 p-5">
+                            <div>
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-emerald-300/80">Aide</p>
+                                <h2 className="mt-1 font-display text-xl font-semibold">Commandes de la ferme</h2>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setHelp(false)}
+                                className="grid size-9 place-items-center rounded-xl bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
+                                aria-label="Fermer l’aide"
+                            >
+                                <X className="size-4" />
+                            </button>
+                        </div>
+
+                        <div className="space-y-2 p-5">
+                            {MODES.map((entry) => {
+                                const Icon = entry.icon;
+
+                                return (
+                                    <div key={entry.id} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.03] p-3">
+                                        <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-emerald-500/15 text-emerald-300">
+                                            <Icon className="size-4" />
+                                        </span>
+                                        <div>
+                                            <p className="text-sm font-semibold">{entry.label}</p>
+                                            <p className="mt-0.5 text-xs text-white/55">{entry.description}</p>
+                                            <p className="mt-1 font-mono text-[11px] text-emerald-200/80">{entry.controls}</p>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+
+                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-xs text-white/60">
+                                <p className="font-semibold text-white/80">Astuces</p>
+                                <ul className="mt-1.5 space-y-1">
+                                    <li className="flex items-center gap-2"><CircleDot className="size-3 text-emerald-300" /> Cliquez sur une parcelle pour afficher ses données réelles.</li>
+                                    <li className="flex items-center gap-2"><CircleDot className="size-3 text-sky-300" /> Les réservoirs bleus représentent les points d’eau enregistrés.</li>
+                                    <li className="flex items-center gap-2"><CircleDot className="size-3 text-amber-300" /> Le cycle jour/nuit peut être mis en pause dans la barre du haut.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>
     );
 }
 
+function Metric({
+    icon: Icon,
+    label,
+    value,
+}: {
+    icon: typeof Sprout;
+    label: string;
+    value: string;
+}) {
+    return (
+        <div className="rounded-xl border border-white/8 bg-white/[0.04] px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-white/45">
+                <Icon className="size-3.5" />
+                <span className="text-[10px] font-medium uppercase tracking-wide">{label}</span>
+            </div>
+            <p className="mt-1 font-display text-lg font-semibold tabular-nums text-white">{value}</p>
+        </div>
+    );
+}
+
+function SelectionPanel({
+    selection,
+    onClose,
+    onFocus,
+}: {
+    selection: NonNullable<FarmSelection>;
+    onClose: () => void;
+    onFocus: () => void;
+}) {
+    if (selection.kind === 'water') {
+        const row = selection.row;
+        const available = Number(row.available_quantity ?? 0);
+        const capacity = Number(row.capacity ?? 0);
+        const ratio = capacity > 0 ? clampPercent((available / capacity) * 100) : 0;
+
+        return (
+            <div>
+                <div className="border-b border-white/10 bg-sky-500/10 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                            <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-sky-300/80">Point d’eau</p>
+                            <p className="mt-1 truncate font-display text-base font-semibold">{String(row.name ?? 'Réservoir')}</p>
+                            <p className="mt-0.5 text-xs text-white/50">#{String(row.id)} · {humanize(String(row.type ?? '—'))}</p>
+                        </div>
+                        <button type="button" onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white" aria-label="Fermer">
+                            <X className="size-4" />
+                        </button>
+                    </div>
+                </div>
+
+                <div className="space-y-3 p-4">
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="flex items-end justify-between gap-2">
+                            <div>
+                                <p className="text-[10px] uppercase tracking-wide text-white/40">Disponible</p>
+                                <p className="font-display text-2xl font-semibold tabular-nums">{available}</p>
+                            </div>
+                            <p className="text-xs text-white/50">/ {capacity} {String(row.unit ?? '')}</p>
+                        </div>
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                            <div className="h-full rounded-full bg-sky-400" style={{ width: `${ratio}%` }} />
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                        <Detail label="Statut" value={humanize(String(row.status ?? '—'))} />
+                        <Detail label="Seuil critique" value={`${formatValue(row.critical_threshold)} ${String(row.unit ?? '')}`.trim()} />
+                    </div>
+
+                    <button type="button" onClick={onFocus} className="flex w-full items-center justify-center gap-2 rounded-xl bg-sky-500 px-3 py-2 text-xs font-semibold text-sky-950 transition hover:bg-sky-400">
+                        <Crosshair className="size-4" />
+                        Centrer sur le réservoir
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    const row = selection.row;
+    const status = STATUS[String(row.status)] ?? STATUS.disponible;
+    const moisture = Number(row.soil_moisture);
+    const moistureRatio = Number.isFinite(moisture) ? clampPercent(moisture) : 0;
+    const moistureColor = moistureRatio < 35 ? 'bg-amber-400' : moistureRatio < 65 ? 'bg-sky-400' : 'bg-emerald-400';
+
+    return (
+        <div>
+            <div className="border-b border-white/10 p-4" style={{ background: `linear-gradient(135deg, ${status.css}22, transparent 70%)` }}>
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.2em]" style={{ color: status.css }}>
+                            <StatusDot color={status.css} />
+                            {status.label}
+                        </div>
+                        <p className="mt-1 truncate font-display text-base font-semibold">{String(row.name ?? 'Parcelle')}</p>
+                        <p className="mt-0.5 text-xs text-white/50">
+                            {String(row.code ?? '—')} · #{String(row.id)}
+                        </p>
+                    </div>
+                    <button type="button" onClick={onClose} className="grid size-8 shrink-0 place-items-center rounded-lg bg-white/5 text-white/60 hover:bg-white/10 hover:text-white" aria-label="Fermer">
+                        <X className="size-4" />
+                    </button>
+                </div>
+            </div>
+
+            <div className="space-y-3 p-4">
+                <div className="grid grid-cols-2 gap-2">
+                    <Detail label="Surface" value={formatArea(row)} />
+                    <Detail label="Priorité" value={humanize(String(row.manual_priority ?? '—'))} />
+                    <Detail label="Sol" value={String(row.soil_type ?? '—')} />
+                    <Detail label="Localisation" value={String(row.location ?? '—')} />
+                </div>
+
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                    <div className="flex items-center justify-between gap-2">
+                        <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-white/45">
+                            <Droplets className="size-3.5" />
+                            Humidité du sol
+                        </p>
+                        <p className="font-display text-sm font-semibold tabular-nums">
+                            {Number.isFinite(moisture) ? `${moisture.toFixed(1)} %` : '—'}
+                        </p>
+                    </div>
+                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+                        <div className={`h-full rounded-full ${moistureColor}`} style={{ width: `${moistureRatio}%` }} />
+                    </div>
+                </div>
+
+                <button type="button" onClick={onFocus} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-emerald-950 transition hover:bg-emerald-400">
+                    <Crosshair className="size-4" />
+                    Centrer sur la parcelle
+                    <ChevronRight className="size-3.5" />
+                </button>
+            </div>
+        </div>
+    );
+}
+
 function Detail({ label, value }: { label: string; value: string }) {
     return (
-        <div className="rounded-lg bg-ink-50 px-4 py-3">
-            <dt className="text-xs uppercase tracking-wide text-ink-400">{label}</dt>
-            <dd className="mt-0.5 font-semibold text-ink-800">{value}</dd>
+        <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
+            <p className="text-[9px] font-medium uppercase tracking-wide text-white/35">{label}</p>
+            <p className="mt-0.5 truncate text-xs font-semibold text-white/85">{value}</p>
+        </div>
+    );
+}
+
+function clampPercent(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(100, value));
+}
+
+function Minimap({ data, mode }: { data: FarmMinimap; mode: ViewMode }) {
+    const active = mode === 'drive' ? data.tractor : data.player;
+    const markerColor = mode === 'drive' ? '#f87171' : '#34d399';
+
+    return (
+        <div className="pointer-events-none absolute right-3 bottom-3 z-10 hidden overflow-hidden rounded-2xl border border-white/15 bg-slate-950/72 p-2 shadow-2xl backdrop-blur-xl md:block">
+            <div className="relative">
+                <svg viewBox="-180 -180 360 360" className="size-40 rounded-xl bg-[#2f4a2c]">
+                    <defs>
+                        <pattern id="farm-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                            <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="0.7" />
+                        </pattern>
+                    </defs>
+                    <rect x="-180" y="-180" width="360" height="360" fill="url(#farm-grid)" />
+                    <circle cx={70} cy={49} r={18} fill="#2c7fa8" stroke="#7dd3fc" strokeWidth="1.5" />
+                    {data.plots.map((plot) => (
+                        <rect
+                            key={plot.id}
+                            x={plot.x - plot.width / 2}
+                            y={plot.z - plot.depth / 2}
+                            width={plot.width}
+                            height={plot.depth}
+                            rx={3}
+                            fill={plot.color}
+                            fillOpacity={0.8}
+                            stroke="rgba(255,255,255,0.35)"
+                            strokeWidth="1"
+                        />
+                    ))}
+                    {data.water.map((source, index) => (
+                        <circle key={index} cx={source.x} cy={source.z} r={4} fill="#38bdf8" stroke="#e0f2fe" strokeWidth="1" />
+                    ))}
+                    <circle cx={active.x} cy={active.z} r={12} fill={markerColor} fillOpacity={0.18} />
+                    <circle cx={active.x} cy={active.z} r={5.5} fill={markerColor} stroke="#ffffff" strokeWidth="1.5" />
+                    <text x="-168" y="-162" fill="rgba(255,255,255,0.7)" fontSize="11" fontWeight="700">N</text>
+                </svg>
+                <span className="absolute top-1.5 right-1.5 rounded-full border border-white/10 bg-slate-950/70 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/60">
+                    {mode === 'drive' ? 'Tracteur' : mode === 'walk' ? 'Vous' : 'Ferme'}
+                </span>
+            </div>
         </div>
     );
 }
