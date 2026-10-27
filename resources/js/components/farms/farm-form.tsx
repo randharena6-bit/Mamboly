@@ -6,6 +6,7 @@ import type { FarmFormValues } from '../../types/farm';
 import { Button } from '../ui/button';
 import { CardFooter } from '../ui/card';
 import { Input } from '../ui/input';
+import { Select } from '../ui/select';
 
 function csrfToken(): string {
     return document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '';
@@ -156,17 +157,16 @@ export function FarmForm({
                         <label htmlFor="farm-status" className="text-sm font-semibold text-ink-800">
                             Statut
                         </label>
-                        <select
+                        <Select
                             id="farm-status"
                             name="status"
                             value={values.status}
                             onChange={(e) => update('status', e.target.value)}
-                            className="h-11 w-full rounded-xl border border-ink-200 bg-white px-3.5 text-[0.9375rem] text-ink-900 shadow-xs transition-colors focus:border-brand-600 focus:ring-3 focus:ring-brand-600/15 focus:outline-none"
                         >
                             <option value="active">Actif</option>
                             <option value="inactive">Inactif</option>
                             <option value="pending">En attente</option>
-                        </select>
+                        </Select>
                     </div>
                 </div>
             </div>

@@ -2,10 +2,12 @@ import { AlertCircle, ArrowLeft, Pencil, RefreshCw, Tractor, Trash2, Users } fro
 import { useCallback, useEffect, useState } from 'react';
 
 import { AppShell } from '../components/dashboard/app-shell';
+import { Badge } from '../components/ui/badge';
 import { ErrorState } from '../components/landing/states';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { ConfirmDialog } from '../components/ui/confirm-dialog';
+import { cn } from '../lib/cn';
 import { goTo } from '../lib/forms';
 import type { FarmShowPayload } from '../types/farm';
 
@@ -177,26 +179,81 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
                         )}
                     </div>
 
-                    <Card>
+                    <Card className="overflow-hidden">
+                        <span aria-hidden="true" className="block h-1 bg-gradient-to-r from-brand-600 via-brand-400 to-water-500" />
                         <CardHeader>
-                            <CardTitle className="flex items-center gap-2">
-                                <Tractor className="size-4 text-brand-600" />
-                                Détail de l'exploitation
-                            </CardTitle>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex items-center gap-3">
+                                    <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-50 to-water-50 text-brand-700 ring-1 ring-brand-100">
+                                        <Tractor className="size-5" />
+                                    </span>
+                                    <div>
+                                        <CardTitle>Détail de l’exploitation</CardTitle>
+                                        <p className="mt-0.5 text-sm text-ink-500">
+                                            {farm.type ?? 'Type non renseigné'}
+                                            {farm.createdAt
+                                                ? ` · créée le ${new Date(farm.createdAt).toLocaleDateString('fr-FR')}`
+                                                : ''}
+                                        </p>
+                                    </div>
+                                </div>
+                                <Badge
+                                    variant={
+                                        farm.status === 'active'
+                                            ? 'brand'
+                                            : farm.status === 'pending'
+                                              ? 'warning'
+                                              : 'outline'
+                                    }
+                                    size="md"
+                                >
+                                    {farm.status === 'active'
+                                        ? 'Active'
+                                        : farm.status === 'pending'
+                                          ? 'En attente'
+                                          : 'Inactive'}
+                                </Badge>
+                            </div>
                         </CardHeader>
-                        <CardContent className="grid gap-2 text-sm text-ink-600 sm:grid-cols-2 lg:grid-cols-3">
-                            <p>Type : {farm.type ?? '—'}</p>
-                            <p>Statut : {farm.status ?? '—'}</p>
-                            <p>Superficie : {farm.totalArea != null ? `${farm.totalArea} ha` : '—'}</p>
-                            <p>Parcelles : {farm.counts.plots} (en culture : {farm.counts.plotsInCrop})</p>
-                            <p>Campagnes : {farm.counts.campaigns} (actives : {farm.counts.campaignsActive})</p>
-                            <p>Sources d'eau : {farm.counts.waterSources}</p>
-                            <p>Valeur stock : {farm.metrics.stockValue.toLocaleString('fr-FR')} MGA</p>
-                            <p>Dépenses (mois) : {farm.metrics.monthExpenses.toLocaleString('fr-FR')} MGA</p>
-                            <p>Recettes (mois) : {farm.metrics.monthRevenues.toLocaleString('fr-FR')} MGA</p>
-                            <p>Eau disponible : {farm.metrics.waterAvailable.toLocaleString('fr-FR')} L</p>
-                            <p>Alertes non lues : {farm.unreadAlerts}</p>
-                            <p>Créée le : {farm.createdAt ? new Date(farm.createdAt).toLocaleDateString('fr-FR') : '—'}</p>
+                        <CardContent>
+                            <dl className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
+                                <FarmStat
+                                    label="Superficie"
+                                    value={farm.totalArea != null ? `${farm.totalArea} ha` : '—'}
+                                />
+                                <FarmStat
+                                    label="Parcelles"
+                                    value={`${farm.counts.plots}`}
+                                    hint={`${farm.counts.plotsInCrop} en culture`}
+                                />
+                                <FarmStat
+                                    label="Campagnes"
+                                    value={`${farm.counts.campaigns}`}
+                                    hint={`${farm.counts.campaignsActive} actives`}
+                                />
+                                <FarmStat label="Sources d’eau" value={`${farm.counts.waterSources}`} />
+                                <FarmStat
+                                    label="Valeur du stock"
+                                    value={`${farm.metrics.stockValue.toLocaleString('fr-FR')} MGA`}
+                                />
+                                <FarmStat
+                                    label="Dépenses du mois"
+                                    value={`${farm.metrics.monthExpenses.toLocaleString('fr-FR')} MGA`}
+                                />
+                                <FarmStat
+                                    label="Recettes du mois"
+                                    value={`${farm.metrics.monthRevenues.toLocaleString('fr-FR')} MGA`}
+                                />
+                                <FarmStat
+                                    label="Eau disponible"
+                                    value={`${farm.metrics.waterAvailable.toLocaleString('fr-FR')} L`}
+                                />
+                                <FarmStat
+                                    label="Alertes non lues"
+                                    value={`${farm.unreadAlerts}`}
+                                    alert={farm.unreadAlerts > 0}
+                                />
+                            </dl>
                         </CardContent>
                     </Card>
 
@@ -209,17 +266,35 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
                                 </CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <ul className="space-y-2 text-sm">
+                                <ul className="grid gap-2 sm:grid-cols-2">
                                     {farm.team.members.map((member) => (
-                                        <li key={member.id} className="rounded-lg border border-ink-100 p-3">
-                                            <p className="font-medium text-ink-900">{member.name}</p>
-                                            <p className="text-ink-500">{member.email}</p>
-                                            <p className="text-ink-500">
-                                                Rôle : {member.role} — Actif : {member.isActive ? 'oui' : 'non'}
-                                            </p>
-                                            <p className="text-xs text-ink-400">
-                                                Dernière connexion : {member.lastLoginAt ? new Date(member.lastLoginAt).toLocaleDateString('fr-FR') : '—'}
-                                            </p>
+                                        <li
+                                            key={member.id}
+                                            className="flex items-start gap-3 rounded-xl border border-ink-100 bg-white p-3"
+                                        >
+                                            <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 text-[0.6875rem] font-bold text-white">
+                                                {initials(member.name)}
+                                            </span>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-2">
+                                                    <p className="truncate text-sm font-semibold text-ink-900">{member.name}</p>
+                                                    <span
+                                                        className={cn(
+                                                            'size-1.5 shrink-0 rounded-full',
+                                                            member.isActive ? 'bg-brand-500' : 'bg-ink-300',
+                                                        )}
+                                                        title={member.isActive ? 'Compte actif' : 'Compte inactif'}
+                                                    />
+                                                </div>
+                                                <p className="truncate text-xs text-ink-500">{member.email}</p>
+                                                <p className="mt-1 text-[0.625rem] text-ink-400">
+                                                    {member.role}
+                                                    {' · '}
+                                                    {member.lastLoginAt
+                                                        ? `vu le ${new Date(member.lastLoginAt).toLocaleDateString('fr-FR')}`
+                                                        : 'jamais connecté'}
+                                                </p>
+                                            </div>
                                         </li>
                                     ))}
                                 </ul>
@@ -233,14 +308,24 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
                                 <CardTitle>Campagnes en cours / prévues</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <ul className="space-y-2 text-sm">
+                                <ul className="grid gap-2 sm:grid-cols-2">
                                     {farm.campaigns.map((campaign) => (
-                                        <li key={campaign.id} className="rounded-lg border border-ink-100 p-3">
-                                            <p className="font-medium text-ink-900">{campaign.name}</p>
-                                            <p className="text-ink-500">Statut : {campaign.status}</p>
-                                            <p className="text-ink-500">Culture : {campaign.cropName ?? '—'}</p>
-                                            <p className="text-ink-500">Parcelle : {campaign.plotName ?? campaign.plotCode ?? '—'}</p>
-                                            <p className="text-ink-500">Surface : {campaign.area} m²</p>
+                                        <li key={campaign.id} className="rounded-xl border border-ink-100 bg-white p-3">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <p className="text-sm font-semibold text-ink-900">{campaign.name}</p>
+                                                <Badge variant="outline" size="sm">
+                                                    {campaign.status}
+                                                </Badge>
+                                            </div>
+                                            <p className="mt-1 text-xs text-ink-500">
+                                                {campaign.cropName ?? 'Culture non renseignée'}
+                                                {campaign.plotName ?? campaign.plotCode
+                                                    ? ` · ${campaign.plotName ?? campaign.plotCode}`
+                                                    : ''}
+                                            </p>
+                                            <p className="mt-1 text-[0.625rem] font-semibold text-ink-400">
+                                                Surface : {campaign.area} m²
+                                            </p>
                                         </li>
                                     ))}
                                 </ul>
@@ -261,4 +346,25 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
             />
         </>
     );
+}
+
+function FarmStat({ label, value, hint, alert = false }: { label: string; value: string; hint?: string; alert?: boolean }) {
+    return (
+        <div className="rounded-xl border border-ink-100 bg-ink-50/40 px-3 py-2.5">
+            <dt className="text-[0.625rem] font-bold tracking-[0.08em] text-ink-400 uppercase">{label}</dt>
+            <dd className={cn('mt-1 text-sm font-semibold', alert ? 'text-harvest-700' : 'text-ink-900')}>
+                {value}
+            </dd>
+            {hint && <p className="mt-0.5 text-[0.625rem] text-ink-400">{hint}</p>}
+        </div>
+    );
+}
+
+function initials(name: string): string {
+    return name
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((part) => part[0]?.toUpperCase() ?? '')
+        .join('');
 }

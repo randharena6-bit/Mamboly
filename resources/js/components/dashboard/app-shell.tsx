@@ -150,6 +150,10 @@ export function AppShell({
 
     const closeMobile = () => setMobileOpen(false);
 
+    // L'aperçu marketing reste toujours déplié, quel que soit l'état choisi
+    // dans l'application.
+    const sidebarCollapsed = isApp && collapsed;
+
     return (
         <div
             className={cn(
@@ -166,18 +170,21 @@ export function AppShell({
                     className={cn(
                         'hidden shrink-0 flex-col border-r border-ink-200/60 bg-white/85 backdrop-blur-xl transition-[width] duration-300 md:flex',
                         isApp ? 'sticky top-0 h-screen' : 'min-h-[38rem]',
-                        collapsed ? 'w-[5.25rem]' : 'w-[17.5rem]',
+                        sidebarCollapsed ? 'w-[5.25rem]' : 'w-[17.5rem]',
                     )}
                 >
-                    <SidebarHeader collapsed={collapsed} onToggle={toggleCollapsed} />
+                    <SidebarHeader
+                        collapsed={sidebarCollapsed}
+                        onToggle={isApp ? toggleCollapsed : undefined}
+                    />
 
                     <SidebarNavigation
-                        collapsed={collapsed}
+                        collapsed={sidebarCollapsed}
                         activeNav={activeNav}
                         onNavigate={undefined}
                     />
 
-                    <SidebarFooter collapsed={collapsed} farm={farm} />
+                    <SidebarFooter collapsed={sidebarCollapsed} farm={farm} />
                 </aside>
 
                 {/* Tiroir mobile */}
@@ -365,9 +372,7 @@ export function AppShell({
                 </div>
             </div>
 
-            {isApp && (
-                <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} activeNav={activeNav} />
-            )}
+            <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} activeNav={activeNav} />
         </div>
     );
 }
@@ -376,7 +381,7 @@ export function AppShell({
 /* Fragments de la coquille                                            */
 /* ------------------------------------------------------------------ */
 
-function SidebarHeader({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+function SidebarHeader({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () => void }) {
     return (
         <div className={cn('flex items-center gap-2 border-b border-ink-100 px-3 py-4', collapsed && 'flex-col gap-3')}>
             <a
@@ -399,19 +404,21 @@ function SidebarHeader({ collapsed, onToggle }: { collapsed: boolean; onToggle: 
                 )}
             </a>
 
-            <button
-                type="button"
-                onClick={onToggle}
-                aria-label={collapsed ? 'Déplier la navigation' : 'Réduire la navigation'}
-                title={collapsed ? 'Déplier la navigation' : 'Réduire la navigation'}
-                className="hidden size-8 shrink-0 place-items-center rounded-lg border border-ink-200 bg-white text-ink-400 transition-colors hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 md:grid"
-            >
-                {collapsed ? (
-                    <PanelLeftOpen aria-hidden="true" className="size-4" />
-                ) : (
-                    <PanelLeftClose aria-hidden="true" className="size-4" />
-                )}
-            </button>
+            {onToggle && (
+                <button
+                    type="button"
+                    onClick={onToggle}
+                    aria-label={collapsed ? 'Déplier la navigation' : 'Réduire la navigation'}
+                    title={collapsed ? 'Déplier la navigation' : 'Réduire la navigation'}
+                    className="hidden size-8 shrink-0 place-items-center rounded-lg border border-ink-200 bg-white text-ink-400 transition-colors hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 md:grid"
+                >
+                    {collapsed ? (
+                        <PanelLeftOpen aria-hidden="true" className="size-4" />
+                    ) : (
+                        <PanelLeftClose aria-hidden="true" className="size-4" />
+                    )}
+                </button>
+            )}
         </div>
     );
 }

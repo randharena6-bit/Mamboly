@@ -1,4 +1,4 @@
-import { Layers, MapPin, Pencil, Trash2 } from 'lucide-react';
+import { Layers, MapPin, Pencil, Sprout, Trash2 } from 'lucide-react';
 
 import type { FarmSummary } from '../../types/farm';
 import { Badge } from '../ui/badge';
@@ -35,28 +35,40 @@ export function FarmListCard({
     const status = farm.status ?? null;
 
     return (
-        <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-soft transition-shadow hover:shadow-card">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                        <a
-                            href={`/exploitations/${farm.id}`}
-                            className="truncate font-display text-base font-bold text-ink-900 hover:text-brand-700"
-                        >
-                            {farm.name}
-                        </a>
-                        {status && (
-                            <Badge variant={statusTone[status] ?? 'outline'} size="sm">
-                                {statusLabel[status] ?? status}
-                            </Badge>
-                        )}
-                    </div>
+        <div className="group relative overflow-hidden rounded-2xl border border-ink-100 bg-white p-5 shadow-soft transition-all duration-300 hover:-translate-y-0.5 hover:border-brand-200/70 hover:shadow-card">
+            <span
+                aria-hidden="true"
+                className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand-600 via-brand-400 to-water-500"
+            />
 
-                    <p className="mt-1 flex items-center gap-1.5 text-xs text-ink-500">
-                        <MapPin aria-hidden="true" className="size-3.5" />
-                        {farm.location ?? 'Localisation non renseignée'}
-                        {farm.type ? <span className="text-ink-400">· {farm.type}</span> : null}
-                    </p>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="flex min-w-0 items-start gap-3">
+                    <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-50 to-water-50 text-brand-700 ring-1 ring-brand-100">
+                        <Sprout aria-hidden="true" className="size-5" />
+                    </span>
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                            <a
+                                href={`/exploitations/${farm.id}`}
+                                className="truncate font-display text-base font-bold text-ink-900 transition-colors hover:text-brand-700"
+                            >
+                                {farm.name}
+                            </a>
+                            {status && (
+                                <Badge variant={statusTone[status] ?? 'outline'} size="sm">
+                                    {statusLabel[status] ?? status}
+                                </Badge>
+                            )}
+                        </div>
+
+                        <p className="mt-1 flex items-center gap-1.5 text-xs text-ink-500">
+                            <MapPin aria-hidden="true" className="size-3.5 shrink-0 text-ink-400" />
+                            <span className="truncate">
+                                {farm.location ?? 'Localisation non renseignée'}
+                                {farm.type ? <span className="text-ink-400"> · {farm.type}</span> : null}
+                            </span>
+                        </p>
+                    </div>
                 </div>
 
                 <div className="flex shrink-0 items-center gap-1.5">
@@ -88,7 +100,7 @@ export function FarmListCard({
                 </div>
             </div>
 
-            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-6">
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 rounded-xl border border-ink-100/80 bg-ink-50/40 p-3.5 text-sm sm:grid-cols-3 lg:grid-cols-6">
                 <Metric label="Superficie" value={farm.totalArea != null ? `${farm.totalArea} ha` : '—'} />
                 <Metric label="Parcelles" value={`${farm.counts.plots} (${farm.counts.plotsInCrop} en culture)`} />
                 <Metric label="Campagnes actives" value={String(farm.counts.campaignsActive)} />
@@ -107,8 +119,8 @@ export function FarmListCard({
 function Metric({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) {
     return (
         <div>
-            <dt className="text-[0.6875rem] font-semibold tracking-wide text-ink-400 uppercase">{label}</dt>
-            <dd className={`mt-0.5 font-semibold ${alert ? 'text-harvest-700' : 'text-ink-900'}`}>{value}</dd>
+            <dt className="text-[0.625rem] font-bold tracking-[0.08em] text-ink-400 uppercase">{label}</dt>
+            <dd className={`mt-0.5 truncate font-semibold ${alert ? 'text-harvest-700' : 'text-ink-900'}`}>{value}</dd>
         </div>
     );
 }

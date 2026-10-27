@@ -232,28 +232,53 @@ function FarmOverview({
 /** Mode fiche (compte non-administrateur) : l'essentiel de son exploitation. */
 function FarmSingle({ farm }: { farm: FarmSummary }) {
     return (
-        <Card>
+        <Card className="overflow-hidden">
+            <span aria-hidden="true" className="block h-1 bg-gradient-to-r from-brand-600 via-brand-400 to-water-500" />
+
             <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                    <Tractor className="size-4 text-brand-600" />
-                    {farm.name}
-                </CardTitle>
+                <div className="flex items-start gap-3">
+                    <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-brand-50 to-water-50 text-brand-700 ring-1 ring-brand-100">
+                        <Tractor className="size-5" />
+                    </span>
+                    <div className="min-w-0">
+                        <CardTitle className="truncate">{farm.name}</CardTitle>
+                        <p className="mt-0.5 text-sm text-ink-500">
+                            {farm.location ?? 'Localisation non renseignée'}
+                            {farm.type ? ` · ${farm.type}` : ''}
+                        </p>
+                    </div>
+                </div>
             </CardHeader>
-            <CardContent className="space-y-2 text-sm text-ink-600">
-                <p>Localisation : {farm.location ?? '—'}</p>
-                <p>Type : {farm.type ?? '—'}</p>
-                <p>Superficie : {farm.totalArea != null ? `${farm.totalArea} ha` : '—'}</p>
-                <p>Parcelles : {farm.counts.plots} (en culture : {farm.counts.plotsInCrop})</p>
-                <p>Campagnes : {farm.counts.campaigns} (actives : {farm.counts.campaignsActive})</p>
-                <p>Sources d'eau : {farm.counts.waterSources}</p>
-                <p>Valeur stock : {farm.metrics.stockValue.toLocaleString('fr-FR')} MGA</p>
-                <p>Alertes non lues : {farm.unreadAlerts}</p>
-                <p>
-                    <a href={`/exploitations/${farm.id}`} className="text-brand-700 hover:underline">
+
+            <CardContent>
+                <dl className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                    <FarmDetail label="Superficie" value={farm.totalArea != null ? `${farm.totalArea} ha` : '—'} />
+                    <FarmDetail label="Parcelles" value={`${farm.counts.plots} dont ${farm.counts.plotsInCrop} en culture`} />
+                    <FarmDetail label="Campagnes" value={`${farm.counts.campaigns} dont ${farm.counts.campaignsActive} actives`} />
+                    <FarmDetail label="Sources d’eau" value={String(farm.counts.waterSources)} />
+                    <FarmDetail label="Valeur du stock" value={`${farm.metrics.stockValue.toLocaleString('fr-FR')} MGA`} />
+                    <FarmDetail
+                        label="Alertes non lues"
+                        value={String(farm.unreadAlerts)}
+                        alert={farm.unreadAlerts > 0}
+                    />
+                </dl>
+
+                <Button asChild variant="outline" size="sm" className="mt-4">
+                    <a href={`/exploitations/${farm.id}`}>
                         Voir la fiche complète
                     </a>
-                </p>
+                </Button>
             </CardContent>
         </Card>
+    );
+}
+
+function FarmDetail({ label, value, alert = false }: { label: string; value: string; alert?: boolean }) {
+    return (
+        <div className="rounded-xl border border-ink-100 bg-ink-50/40 px-3 py-2.5">
+            <dt className="text-[0.625rem] font-bold tracking-[0.08em] text-ink-400 uppercase">{label}</dt>
+            <dd className={`mt-1 text-sm font-semibold ${alert ? 'text-harvest-700' : 'text-ink-900'}`}>{value}</dd>
+        </div>
     );
 }
