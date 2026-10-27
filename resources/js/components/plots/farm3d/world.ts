@@ -1241,7 +1241,11 @@ export class FarmWorld {
         const onPointerDown = (event: PointerEvent) => {
             this.pointer = { down: true, x: event.clientX, y: event.clientY, moved: 0 };
             if (this.mode !== 'orbit') {
-                canvas.setPointerCapture(event.pointerId);
+                try {
+                    canvas.setPointerCapture(event.pointerId);
+                } catch {
+                    // Les événements synthétiques n'ont pas de pointeur actif.
+                }
             }
         };
 
@@ -1264,8 +1268,12 @@ export class FarmWorld {
             const wasClick = this.pointer.moved < 6;
             this.pointer.down = false;
 
-            if (canvas.hasPointerCapture(event.pointerId)) {
-                canvas.releasePointerCapture(event.pointerId);
+            try {
+                if (canvas.hasPointerCapture(event.pointerId)) {
+                    canvas.releasePointerCapture(event.pointerId);
+                }
+            } catch {
+                // Ignore les pointeurs déjà relâchés.
             }
 
             if (wasClick) {
