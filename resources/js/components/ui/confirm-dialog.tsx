@@ -82,7 +82,7 @@ export function ConfirmDialog({
                 aria-label="Fermer la fenêtre"
                 disabled={busy}
                 onClick={onCancel}
-                className="absolute inset-0 cursor-default bg-ink-900/45 backdrop-blur-[2px]"
+                className="absolute inset-0 cursor-default bg-ink-950/50 backdrop-blur-sm"
             />
 
             <div
@@ -90,7 +90,7 @@ export function ConfirmDialog({
                 aria-modal="true"
                 aria-labelledby="confirm-dialog-title"
                 aria-describedby={description ? 'confirm-dialog-description' : undefined}
-                className="relative w-full max-w-md rounded-2xl border border-ink-100 bg-white p-5 shadow-lift"
+                className="relative w-full max-w-md rounded-3xl border border-ink-100 bg-white p-6 shadow-float animate-scale-in"
             >
                 <div className="flex items-start gap-3">
                     <span
@@ -124,11 +124,10 @@ export function ConfirmDialog({
                     <Button
                         ref={confirmRef}
                         type="button"
-                        variant="primary"
+                        variant={variant === 'danger' ? 'danger' : 'primary'}
                         size="sm"
                         disabled={busy}
                         onClick={onConfirm}
-                        className={variant === 'danger' ? 'bg-red-600 hover:bg-red-700' : undefined}
                     >
                         {busy ? 'En cours…' : confirmLabel}
                     </Button>

@@ -102,35 +102,33 @@ export function FarmsPage({ endpoint }: { endpoint: string }) {
 
     if (state.status === 'loading') {
         return (
-            <Frame>
-                <AppShell
-                    activeNav="/exploitations"
-                    user={{ name: 'Chargement…', role: '', initials: 'AW' }}
-                    title="Exploitations"
-                    subtitle="Chargement des données…"
-                    variant="app"
-                >
-                    <Card>
-                        <CardContent className="py-10 text-center text-sm text-ink-500">
-                            Chargement en cours…
-                        </CardContent>
-                    </Card>
-                </AppShell>
-            </Frame>
+            <AppShell
+                activeNav="/exploitations"
+                user={{ name: 'Chargement…', role: '', initials: 'AW' }}
+                title="Exploitations"
+                subtitle="Chargement des données…"
+                variant="app"
+            >
+                <Card>
+                    <CardContent className="py-10 text-center text-sm text-ink-500">
+                        Chargement en cours…
+                    </CardContent>
+                </Card>
+            </AppShell>
         );
     }
 
     if (state.status === 'error') {
         return (
-            <Frame>
-                <div className="flex flex-col items-center gap-6 rounded-2xl border border-ink-100 bg-white px-6 py-20 text-center shadow-soft">
+            <div className="app-backdrop grid min-h-screen place-items-center px-4 py-16">
+                <div className="flex w-full max-w-lg flex-col items-center gap-6 rounded-3xl border border-ink-100 bg-white px-6 py-14 text-center shadow-lift">
                     <ErrorState icon={AlertCircle} title="Page indisponible" description={state.message} />
                     <Button type="button" variant="outline" onClick={() => window.location.reload()}>
                         <RefreshCw aria-hidden="true" className="size-4" />
                         Réessayer
                     </Button>
                 </div>
-            </Frame>
+            </div>
         );
     }
 
@@ -139,7 +137,7 @@ export function FarmsPage({ endpoint }: { endpoint: string }) {
     const canManage = payload.canManage ?? false;
 
     return (
-        <Frame>
+        <>
             <AppShell
                 activeNav="/exploitations"
                 user={{ name: user.name ?? 'Utilisateur', role: user.role ?? '', initials: user.initials }}
@@ -180,7 +178,7 @@ export function FarmsPage({ endpoint }: { endpoint: string }) {
                 onConfirm={confirmDeletion}
                 onCancel={() => setPendingDeletion(null)}
             />
-        </Frame>
+        </>
     );
 }
 
@@ -258,8 +256,4 @@ function FarmSingle({ farm }: { farm: FarmSummary }) {
             </CardContent>
         </Card>
     );
-}
-
-function Frame({ children }: { children: React.ReactNode }) {
-    return <div className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 lg:py-8">{children}</div>;
 }

@@ -268,14 +268,29 @@ export async function loadTerrainTileset(
     const heightAt = (x: number, z: number): number => {
         if (!heights) return 0;
 
-        const px = Math.round(x / mpp + CANVAS_SIZE / 2);
-        const py = Math.round(z / mpp + CANVAS_SIZE / 2);
+        // Position continue dans la grille du MNT. La ligne 0 de la toile
+        // correspond déjà au nord (tuiles XYZ, comme l'axe Y de Mercator
+        // utilisé par `project`) : aucune inversion n'est à appliquer.
+        // `- 0.5` recentre sur le barycentre de chaque pixel.
+        const fx = THREE.MathUtils.clamp(x / mpp + CANVAS_SIZE / 2 - 0.5, 0, CANVAS_SIZE - 1);
+        const fz = THREE.MathUtils.clamp(z / mpp + CANVAS_SIZE / 2 - 0.5, 0, CANVAS_SIZE - 1);
 
-        if (px < 0 || py < 0 || px >= CANVAS_SIZE || py >= CANVAS_SIZE) return 0;
+        const x0 = Math.floor(fx);
+        const z0 = Math.floor(fz);
+        const x1 = Math.min(x0 + 1, CANVAS_SIZE - 1);
+        const z1 = Math.min(z0 + 1, CANVAS_SIZE - 1);
+        const tx = fx - x0;
+        const tz = fz - z0;
 
-        // Flip Y to match Mercator projection
-        const flippedPy = CANVAS_SIZE - 1 - py;
-        return heights[flippedPy * CANVAS_SIZE + px];
+        const h00 = heights[z0 * CANVAS_SIZE + x0];
+        const h10 = heights[z0 * CANVAS_SIZE + x1];
+        const h01 = heights[z1 * CANVAS_SIZE + x0];
+        const h11 = heights[z1 * CANVAS_SIZE + x1];
+
+        const top = h00 + (h10 - h00) * tx;
+        const bottom = h01 + (h11 - h01) * tx;
+
+        return top + (bottom - top) * tz;
     };
 
     return {

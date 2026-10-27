@@ -79,7 +79,7 @@ export function Modal({
                 type="button"
                 aria-label="Fermer la fenêtre"
                 onClick={onClose}
-                className="absolute inset-0 cursor-default bg-ink-900/45 backdrop-blur-[2px]"
+                className="absolute inset-0 cursor-default bg-ink-950/50 backdrop-blur-sm"
             />
 
             <div
@@ -89,17 +89,17 @@ export function Modal({
                 aria-labelledby="modal-title"
                 aria-describedby={description ? 'modal-description' : undefined}
                 className={cn(
-                    'relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl border border-ink-100 bg-white shadow-lift sm:rounded-3xl',
+                    'relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl border border-ink-100 bg-white shadow-float animate-slide-up sm:rounded-3xl',
                     size === 'lg' ? 'sm:max-w-2xl' : 'sm:max-w-lg',
                 )}
             >
-                <div className="flex items-start justify-between gap-4 border-b border-ink-100 px-5 py-4">
+                <div className="relative flex items-start justify-between gap-4 border-b border-ink-100 bg-gradient-to-r from-brand-50/80 via-white to-water-50/60 px-5 py-4">
                     <div className="min-w-0">
                         <h2 id="modal-title" className="font-display text-base font-bold text-ink-900">
                             {title}
                         </h2>
                         {description && (
-                            <p id="modal-description" className="mt-1 text-sm text-ink-500">
+                            <p id="modal-description" className="mt-1 text-sm leading-relaxed text-ink-500">
                                 {description}
                             </p>
                         )}
@@ -108,13 +108,13 @@ export function Modal({
                         type="button"
                         onClick={onClose}
                         aria-label="Fermer"
-                        className="grid size-8 shrink-0 place-items-center rounded-lg text-ink-400 transition-colors hover:bg-ink-50 hover:text-ink-700"
+                        className="grid size-9 shrink-0 place-items-center rounded-full border border-ink-200 bg-white/80 text-ink-400 shadow-xs transition-colors hover:border-ink-300 hover:bg-white hover:text-ink-700"
                     >
-                        <X aria-hidden="true" className="size-5" />
+                        <X aria-hidden="true" className="size-4.5" />
                     </button>
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-y-auto p-5">{children}</div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">{children}</div>
             </div>
         </div>
     );

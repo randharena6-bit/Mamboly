@@ -98,6 +98,8 @@ export type ResourceConfig<T extends ResourceRow = ResourceRow> = {
     canCreate?: boolean;
     canEdit?: boolean;
     canDelete?: boolean;
+    /** Masque la barre de recherche et les actions d'ajout (modules en lecture seule). */
+    hideToolbar?: boolean;
     deleteLabel?: string;
     deleteWarning?: string;
     rowActions?: RowAction<T>[];

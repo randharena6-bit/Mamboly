@@ -26,8 +26,7 @@ export function FarmFormPage({
     const isEdit = mode === 'edit';
 
     return (
-        <Frame>
-            <AppShell
+        <AppShell
                 activeNav="/exploitations"
                 user={{ name: 'Administrateur', role: 'Administrateur', initials: 'AD' }}
                 title={isEdit ? `Modifier ${initial?.name ?? "l'exploitation"}` : 'Nouvelle exploitation'}
@@ -45,11 +44,6 @@ export function FarmFormPage({
                         <FarmForm mode={mode} backUrl={backUrl} farmId={farmId} initial={initial} />
                     </CardContent>
                 </Card>
-            </AppShell>
-        </Frame>
+        </AppShell>
     );
-}
-
-function Frame({ children }: { children: React.ReactNode }) {
-    return <div className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 lg:py-8">{children}</div>;
 }

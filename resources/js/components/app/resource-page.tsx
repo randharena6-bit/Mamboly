@@ -227,10 +227,10 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
         : null;
 
     return (
-        <div className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 lg:py-8">
+        <>
             <AppShell
                 variant="app"
-                activeNav={config.endpoint}
+                activeNav={config.endpoint.replace(/\/data$/, '')}
                 farm={farm}
                 user={{ name: user.name, role: user.role ?? 'Membre', initials: user.initials }}
                 unreadAlerts={context.unreadAlerts}
@@ -248,6 +248,7 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
                         onCreate={() => setForm({ mode: 'create', row: null })}
                         searchPlaceholder={config.searchPlaceholder}
                         views={config.views}
+                        hideToolbar={config.hideToolbar}
                         activeView={activeView}
                         onViewChange={setActiveView}
                     />
@@ -431,7 +432,7 @@ export function ResourcePage<T extends ResourceRow>({ config, endpoint, context 
                 onConfirm={() => pendingAction && void runAction(pendingAction.action, pendingAction.row)}
                 onCancel={() => setPendingAction(null)}
             />
-        </div>
+        </>
     );
 }
 
@@ -448,6 +449,7 @@ function PageHeader({
     views,
     activeView,
     onViewChange,
+    hideToolbar = false,
 }: {
     title: string;
     description: string;
@@ -461,6 +463,7 @@ function PageHeader({
     views?: ResourceView[];
     activeView?: string;
     onViewChange?: (id: string) => void;
+    hideToolbar?: boolean;
 }) {
     return (
         <header className="rounded-2xl border border-ink-100 bg-white p-4 shadow-soft sm:p-5">
@@ -476,27 +479,29 @@ function PageHeader({
                 </div>
 
                 <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-                    <label className="relative min-w-0 flex-1 sm:w-64">
-                        <span className="sr-only">Rechercher</span>
-                        <Search
-                            aria-hidden="true"
-                            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-400"
-                        />
-                        <Input
-                            type="search"
-                            value={search}
-                            onChange={(event) => onSearch(event.target.value)}
-                            placeholder={searchPlaceholder ?? 'Rechercher…'}
-                            className="pl-9"
-                        />
-                    </label>
+                    {!hideToolbar && (
+                        <label className="relative min-w-0 flex-1 sm:w-64">
+                            <span className="sr-only">Rechercher</span>
+                            <Search
+                                aria-hidden="true"
+                                className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-400"
+                            />
+                            <Input
+                                type="search"
+                                value={search}
+                                onChange={(event) => onSearch(event.target.value)}
+                                placeholder={searchPlaceholder ?? 'Rechercher…'}
+                                className="pl-9"
+                            />
+                        </label>
+                    )}
 
                     <Button type="button" variant="outline" size="md" onClick={onRefresh} aria-label="Actualiser les données">
                         <RefreshCw aria-hidden="true" />
-                        <span className="hidden sm:inline">Actualiser</span>
+                        <span className={cn('hidden', !hideToolbar && 'sm:inline')}>Actualiser</span>
                     </Button>
 
-                    {canCreate && (
+                    {!hideToolbar && canCreate && (
                         <Button type="button" size="md" onClick={onCreate} className={cn('flex-1 sm:flex-none')}>
                             <Plus aria-hidden="true" />
                             Ajouter

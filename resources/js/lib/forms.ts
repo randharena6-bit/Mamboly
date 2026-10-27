@@ -14,13 +14,17 @@ export const plotSchema = z.object({
 
 export type PlotForm = z.infer<typeof plotSchema>;
 
+export type FieldErrors = Record<string, string>;
+
 export class FormError extends Error {
-    errors: Record<string, string[]>;
+    errors: FieldErrors;
 
     constructor(errors: Record<string, string[]>, message = 'Erreur de validation') {
         super(message);
         this.name = 'FormError';
-        this.errors = errors;
+        this.errors = Object.fromEntries(
+            Object.entries(errors).map(([field, messages]) => [field, messages[0] ?? '']),
+        );
     }
 }
 

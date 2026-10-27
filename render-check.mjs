@@ -2,22 +2,40 @@
  * Rend le tableau de bord dans un DOM jsdom avec les données réellement
  * servies par /dashboard/data, pour vérifier l'adaptateur et les panneaux.
  */
+import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+
 import { JSDOM } from 'jsdom';
 
 const base = process.argv[2] ?? 'http://127.0.0.1:8123';
 const login = process.argv[3] ?? 'responsable.tsinjo@agriwater.test';
 
 const loginPage = await fetch(`${base}/login`);
-const setCookie = loginPage.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
 const token = (await loginPage.text()).match(/csrf-token" content="([^"]+)"/)[1];
+
+// Les cookies sont fusionnés par nom (la dernière valeur gagne) : Laravel
+// régénère la session à la connexion et envoyer les deux valeurs casse l'auth.
+function cookieJar(...responses) {
+    const jar = new Map();
+
+    for (const response of responses) {
+        for (const cookie of response.headers.getSetCookie()) {
+            const pair = cookie.split(';')[0];
+            const separator = pair.indexOf('=');
+            jar.set(pair.slice(0, separator), pair.slice(separator + 1));
+        }
+    }
+
+    return [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
+}
 
 const auth = await fetch(`${base}/login`, {
     method: 'POST',
     redirect: 'manual',
-    headers: { Cookie: setCookie, Accept: 'application/json', 'X-CSRF-TOKEN': token, 'X-Requested-With': 'XMLHttpRequest' },
+    headers: { Cookie: cookieJar(loginPage), Accept: 'application/json', 'X-CSRF-TOKEN': token, 'X-Requested-With': 'XMLHttpRequest' },
     body: new URLSearchParams({ _token: token, email: login, password: 'password' }),
 });
-const session = [setCookie, ...auth.headers.getSetCookie().map((c) => c.split(';')[0])].join('; ');
+const session = cookieJar(loginPage, auth);
 
 const page = await fetch(`${base}/dashboard`, { headers: { Cookie: session } });
 const html = await page.text();
@@ -25,7 +43,23 @@ console.log('login status:', auth.status, '| redirect:', auth.headers.get('locat
 console.log('dashboard status:', page.status, '| location:', page.headers.get('location'));
 console.log('body head:', html.slice(0, 300));
 const endpoint = html.match(/data-url="([^"]+)"/)[1];
-const assets = [...html.matchAll(/\/build\/assets\/[^"]+\.js/g)].map((m) => m[0]);
+
+// En développement, Blade pointe vers le serveur Vite. On retombe alors sur
+// l'entrée du dernier build pour que la vérification reste utilisable.
+let entry = html.match(/<script type="module" src="([^"]*\/build\/assets\/[^"]+\.js)"/)?.[1];
+
+if (entry === undefined) {
+    const manifest = JSON.parse(await readFile('public/build/manifest.json', 'utf8'));
+    const file = manifest['resources/js/dashboard.tsx']?.file;
+
+    if (file === undefined) {
+        console.error('Aucun build trouvé : lancez `npm run build` avant la vérification.');
+        process.exit(1);
+    }
+
+    entry = `/build/${file}`;
+    console.log('Vite est en mode développement : vérification sur le dernier build.');
+}
 
 const payload = await (await fetch(endpoint, { headers: { Cookie: session, Accept: 'application/json' } })).json();
 
@@ -36,26 +70,69 @@ const dom = new JSDOM(
 );
 
 const errors = [];
-dom.window.addEventListener('error', (event) => errors.push(String(event.error ?? event.message)));
-dom.window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
-dom.window.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
-dom.window.scrollTo ??= () => {};
-for (const [name, value] of Object.entries({
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    Intl, URL, Blob, TextEncoder, TextDecoder, crypto: globalThis.crypto,
-})) dom.window[name] = value;
+const window = dom.window;
+window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+window.matchMedia ??= () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+window.scrollTo ??= () => {};
 
-let code = 0;
-for (const asset of assets) {
+// Les bundles sont des modules ES : on les importe dans Node avec les globals
+// du DOM, plutôt que de les évaluer comme des scripts classiques.
+const globals = {
+    window,
+    document: window.document,
+    navigator: window.navigator,
+    location: window.location,
+    history: window.history,
+    localStorage: window.localStorage,
+    sessionStorage: window.sessionStorage,
+    self: window,
+    getComputedStyle: window.getComputedStyle.bind(window),
+    matchMedia: window.matchMedia.bind(window),
+    ResizeObserver: window.ResizeObserver,
+    IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
+    requestAnimationFrame: window.requestAnimationFrame.bind(window),
+    cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+    HTMLElement: window.HTMLElement,
+    Element: window.Element,
+    Node: window.Node,
+    SVGElement: window.SVGElement,
+    Event: window.Event,
+    MouseEvent: window.MouseEvent,
+    KeyboardEvent: window.KeyboardEvent,
+    CustomEvent: window.CustomEvent,
+    MutationObserver: window.MutationObserver,
+    DOMParser: window.DOMParser,
+    FormData: window.FormData,
+    Blob: window.Blob,
+};
+
+for (const [name, value] of Object.entries(globals)) {
     try {
-        const source = await (await fetch(base + asset)).text();
-        code = new dom.window.Function(source)();
-    } catch (error) {
-        errors.push(`${asset}: ${error.message}`);
+        globalThis[name] = value;
+    } catch {
+        Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
     }
 }
 
-await new Promise((resolve) => setTimeout(resolve, 2500));
+const nodeFetch = globalThis.fetch;
+globalThis.fetch = (input, init = {}) => {
+    const headers = new Headers(init.headers ?? {});
+    headers.set('Cookie', session);
+
+    return nodeFetch(input, { ...init, headers });
+};
+
+process.on('uncaughtException', (error) => errors.push(`exception : ${error.message}`));
+process.on('unhandledRejection', (error) => errors.push(`rejet : ${String(error)}`));
+
+try {
+    const path = process.cwd() + '/public' + new URL(entry, base).pathname;
+    await import(`${pathToFileURL(path).href}?t=${Date.now()}`);
+} catch (error) {
+    errors.push(`${entry}: ${error.message}`);
+}
+
+await new Promise((resolve) => setTimeout(resolve, 3000));
 
 const root = dom.window.document.getElementById('agriwater-dashboard');
 const text = root.textContent.replace(/\s+/g, ' ').trim();

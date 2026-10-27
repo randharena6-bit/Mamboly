@@ -5,6 +5,7 @@ import {
     CalendarCheck,
     CalendarClock,
     CalendarRange,
+    ChartColumnBig,
     CircleCheck,
     CircleX,
     CloudRain,
@@ -861,6 +862,21 @@ export const resourceConfigs: Record<string, ResourceConfig> = {
             { name: 'status', label: 'Statut', type: 'select', options: SCHEDULE_STATUS, default: 'planifiee' },
             { name: 'comment', label: 'Commentaire', type: 'textarea', full: true },
         ],
+    },
+
+    reports: {
+        module: 'reports',
+        title: 'Rapports',
+        singular: 'rapport',
+        description: 'Synthèse de l’exploitation par campagne : parcelles, cultures, eau, trésorerie, intrants et activités.',
+        endpoint: '/rapports/data',
+        icon: ChartColumnBig,
+        canCreate: false,
+        canEdit: false,
+        canDelete: false,
+        hideToolbar: true,
+        columns: [],
+        fields: [],
     },
 
     users: {

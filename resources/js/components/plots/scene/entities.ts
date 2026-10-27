@@ -241,25 +241,8 @@ export function buildEntities(options: BuildOptions): EntityLayers {
         if (!location) continue;
 
         const color = STATUS_COLORS[String(row.status)] ?? 0x64748b;
-        const center = tileset.project(location.lat, location.lng);
         const ring = outerRing(row);
-        const material = new THREE.MeshStandardMaterial({
-            color,
-            emissive: color,
-            emissiveIntensity: 0.12,
-            roughness: 0.5,
-            metalness: 0.05,
-            transparent: true,
-            opacity: 0.92,
-            side: THREE.DoubleSide,
-            polygonOffset: true,
-            polygonOffsetFactor: -3,
-            polygonOffsetUnits: -3,
-        });
-        disposers.push(() => material.dispose());
-
-        let mesh: THREE.Mesh;
-        let outline: THREE.LineLoop | null = null;
+        let centerWorld: { x: number; z: number };
 
         if (ring) {
             const contour = ring.map(([lng, lat]) => {
@@ -267,7 +250,26 @@ export function buildEntities(options: BuildOptions): EntityLayers {
                 return new THREE.Vector2(point.x, point.z);
             });
 
+            // Si la parcelle a un polygone réel, on centre sur son propre
+            // barycentre plutôt que sur des coordonnées lat/lng manquantes.
+            let sumX = 0;
+            let sumZ = 0;
+            for (const point of contour) {
+                sumX += point.x;
+                sumZ += point.y;
+            }
+            centerWorld = { x: sumX / contour.length, z: sumZ / contour.length };
+
             const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
+            const indices = triangles.flat();
+
+            // Inversion de l'orientation pour orienter les normales vers le ciel.
+            for (let index = 0; index < indices.length; index += 3) {
+                const swap = indices[index + 1];
+                indices[index + 1] = indices[index + 2];
+                indices[index + 2] = swap;
+            }
+
             const vertexArray = new Float32Array(contour.length * 3);
 
             contour.forEach((point, index) => {
@@ -278,10 +280,25 @@ export function buildEntities(options: BuildOptions): EntityLayers {
 
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.BufferAttribute(vertexArray, 3));
-            geometry.setIndex(triangles.flat());
+            geometry.setIndex(indices);
             geometry.computeVertexNormals();
 
-            mesh = new THREE.Mesh(geometry, material);
+            const material = new THREE.MeshStandardMaterial({
+                color,
+                emissive: color,
+                emissiveIntensity: 0.12,
+                roughness: 0.5,
+                metalness: 0.05,
+                transparent: true,
+                opacity: 0.92,
+                side: THREE.DoubleSide,
+                polygonOffset: true,
+                polygonOffsetFactor: -3,
+                polygonOffsetUnits: -3,
+            });
+            disposers.push(() => material.dispose());
+
+            const mesh = new THREE.Mesh(geometry, material);
             disposers.push(() => geometry.dispose());
 
             const outlinePoints = contour.map(
@@ -289,11 +306,29 @@ export function buildEntities(options: BuildOptions): EntityLayers {
             );
             const outlineGeometry = new THREE.BufferGeometry().setFromPoints(outlinePoints);
             const outlineMaterial = new THREE.LineBasicMaterial({ color: 0x0f172a, transparent: true, opacity: 0.5 });
-            outline = new THREE.LineLoop(outlineGeometry, outlineMaterial);
+            const outline = new THREE.LineLoop(outlineGeometry, outlineMaterial);
             disposers.push(() => outlineGeometry.dispose(), () => outlineMaterial.dispose());
 
-            exclude.push({ x: center.x, z: center.z, r: Math.max(...contour.map((p) => p.distanceTo(new THREE.Vector2(center.x, center.z)))) + 6 });
+            mesh.castShadow = true;
+            mesh.userData = { kind: 'plot', id: row.id, row, status: String(row.status ?? '') };
+            plots.add(mesh);
+            plots.add(outline);
+            mesh.userData.outline = outline;
+            pickTargets.push(mesh);
+            anchors.set(String(row.id), new THREE.Vector3(centerWorld.x, heightAt(centerWorld.x, centerWorld.z), centerWorld.z));
+
+            exclude.push({ x: centerWorld.x, z: centerWorld.z, r: Math.max(...contour.map((p) => p.distanceTo(new THREE.Vector2(centerWorld.x, centerWorld.z)))) + 6 });
+
+            const label = addLabel(
+                String(row.code ?? row.name ?? ''),
+                colorToHex(color),
+                centerWorld.x,
+                heightAt(centerWorld.x, centerWorld.z) + labelScale * 2.4,
+                centerWorld.z,
+            );
+            mesh.userData.label = label;
         } else {
+            centerWorld = tileset.project(location.lat, location.lng);
             const radius = THREE.MathUtils.clamp(
                 Math.sqrt(areaM2(row) / Math.PI),
                 worldSize * 0.014,
@@ -301,33 +336,43 @@ export function buildEntities(options: BuildOptions): EntityLayers {
             );
             const geometry = new THREE.CircleGeometry(radius, 32);
             geometry.rotateX(-Math.PI / 2);
-            geometry.translate(0, heightAt(center.x, center.z) + 0.8, 0);
+            geometry.translate(0, heightAt(centerWorld.x, centerWorld.z) + 0.8, 0);
 
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.position.set(center.x, 0, center.z);
+            const material = new THREE.MeshStandardMaterial({
+                color,
+                emissive: color,
+                emissiveIntensity: 0.12,
+                roughness: 0.5,
+                metalness: 0.05,
+                transparent: true,
+                opacity: 0.92,
+                side: THREE.DoubleSide,
+                polygonOffset: true,
+                polygonOffsetFactor: -3,
+                polygonOffsetUnits: -3,
+            });
+            disposers.push(() => material.dispose());
+
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(centerWorld.x, 0, centerWorld.z);
             disposers.push(() => geometry.dispose());
 
-            exclude.push({ x: center.x, z: center.z, r: radius + 6 });
-        }
+            mesh.castShadow = true;
+            mesh.userData = { kind: 'plot', id: row.id, row, status: String(row.status ?? '') };
+            plots.add(mesh);
+            pickTargets.push(mesh);
+            anchors.set(String(row.id), new THREE.Vector3(centerWorld.x, heightAt(centerWorld.x, centerWorld.z), centerWorld.z));
+            exclude.push({ x: centerWorld.x, z: centerWorld.z, r: radius + 6 });
 
-        mesh.castShadow = true;
-        mesh.userData = { kind: 'plot', id: row.id, row, status: String(row.status ?? '') };
-        plots.add(mesh);
-        if (outline) {
-            plots.add(outline);
-            mesh.userData.outline = outline;
+            const label = addLabel(
+                String(row.code ?? row.name ?? ''),
+                colorToHex(color),
+                centerWorld.x,
+                heightAt(centerWorld.x, centerWorld.z) + labelScale * 2.4,
+                centerWorld.z,
+            );
+            mesh.userData.label = label;
         }
-        pickTargets.push(mesh);
-        anchors.set(String(row.id), new THREE.Vector3(center.x, heightAt(center.x, center.z), center.z));
-
-        const label = addLabel(
-            String(row.code ?? row.name ?? ''),
-            colorToHex(color),
-            center.x,
-            heightAt(center.x, center.z) + labelScale * 2.4,
-            center.z,
-        );
-        mesh.userData.label = label;
     }
 
     // --- Ressources en eau ------------------------------------------

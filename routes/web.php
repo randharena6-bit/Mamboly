@@ -15,6 +15,7 @@ use App\Http\Controllers\IrrigationController;
 use App\Http\Controllers\IrrigationScheduleController;
 use App\Http\Controllers\PlotController;
 use App\Http\Controllers\PriorityIrrigationController;
+use App\Http\Controllers\ReportController;
 use App\Http\Controllers\RevenueController;
 use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\UserController;
@@ -280,6 +281,9 @@ Route::middleware(['auth', 'db.actor'])->group(function (): void {
     Route::post('/alertes/lues', [AlertController::class, 'markAllRead'])->name('alerts.read-all');
 
     Route::get('/priorite-irrigation', [PriorityIrrigationController::class, 'index'])->name('priority-irrigation.index');
+
+    Route::get('/rapports', [ReportController::class, 'index'])->name('reports.index');
+    Route::get('/rapports/data', [ReportController::class, 'data'])->name('reports.data');
 
     Route::get('/comptes', [UserController::class, 'index'])->name('users.index');
     Route::post('/comptes', [UserController::class, 'store'])->name('users.store');

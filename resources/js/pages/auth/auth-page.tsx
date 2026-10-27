@@ -1,6 +1,6 @@
-import type { ComponentProps } from 'react';
-
 import { AuthSwitcher } from '../../components/auth/auth-switcher';
+import { LoginForm } from '../../components/auth/login-form';
+import { RegisterForm } from '../../components/auth/register-form';
 import { Logo } from '../../components/landing/logo';
 import { cn } from '../../lib/cn';
 
@@ -14,7 +14,7 @@ export function AuthPage({ mode = 'login', className }: { mode?: 'login' | 'regi
                 </a>
 
                 <main className="mx-auto mt-10 flex w-full max-w-md flex-1 flex-col justify-center lg:mt-0">
-                    <AuthSwitcher initialMode={mode} />
+                    <AuthSwitcher defaultMode={mode} login={<LoginForm />} register={<RegisterForm />} />
                 </main>
 
                 <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 text-xs text-ink-400 sm:mt-12">

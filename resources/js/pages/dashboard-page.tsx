@@ -71,18 +71,14 @@ export function DashboardPage({ endpoint }: { endpoint: string }) {
     }, [load]);
 
     if (state.status === 'loading') {
-        return (
-            <Frame>
-                {/* Les fixtures ne servent qu'à endowed la silhouette des panneaux. */}
-                <DashboardFull data={demoDashboardView} view="loading" variant="app" />
-            </Frame>
-        );
+        // Les fixtures ne servent qu'à dessiner la silhouette des panneaux.
+        return <DashboardFull data={demoDashboardView} view="loading" variant="app" />;
     }
 
     if (state.status === 'error') {
         return (
-            <Frame>
-                <div className="flex flex-col items-center gap-6 rounded-2xl border border-ink-100 bg-white px-6 py-20 text-center shadow-soft">
+            <div className="app-backdrop grid min-h-screen place-items-center px-4 py-16">
+                <div className="flex w-full max-w-lg flex-col items-center gap-6 rounded-3xl border border-ink-100 bg-white px-6 py-14 text-center shadow-lift">
                     <ErrorState
                         icon={AlertCircle}
                         title="Tableau de bord indisponible"
@@ -93,18 +89,9 @@ export function DashboardPage({ endpoint }: { endpoint: string }) {
                         Réessayer
                     </Button>
                 </div>
-            </Frame>
+            </div>
         );
     }
 
-    return (
-        <Frame>
-            <DashboardFull data={state.data} variant="app" />
-        </Frame>
-    );
-}
-
-/** Centrage et gouttières communs aux trois états. */
-function Frame({ children }: { children: React.ReactNode }) {
-    return <div className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 lg:py-8">{children}</div>;
+    return <DashboardFull data={state.data} variant="app" />;
 }

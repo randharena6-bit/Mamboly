@@ -94,30 +94,28 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
 
     if (state.status === 'loading') {
         return (
-            <Frame>
-                <AppShell
-                    activeNav="/exploitations"
-                    user={{ name: 'Chargement…', role: '', initials: 'AW' }}
-                    title={name}
-                    subtitle="Chargement des données…"
-                    variant="app"
-                >
-                    <Card>
-                        <CardContent className="py-10 text-center text-sm text-ink-500">
-                            Chargement en cours…
-                        </CardContent>
-                    </Card>
-                </AppShell>
-            </Frame>
+            <AppShell
+                activeNav="/exploitations"
+                user={{ name: 'Chargement…', role: '', initials: 'AW' }}
+                title={name}
+                subtitle="Chargement des données…"
+                variant="app"
+            >
+                <Card>
+                    <CardContent className="py-10 text-center text-sm text-ink-500">
+                        Chargement en cours…
+                    </CardContent>
+                </Card>
+            </AppShell>
         );
     }
 
     if (state.status === 'error') {
         return (
-            <Frame>
-                <div className="flex flex-col items-center gap-6 rounded-2xl border border-ink-100 bg-white px-6 py-20 text-center shadow-soft">
+            <div className="app-backdrop grid min-h-screen place-items-center px-4 py-16">
+                <div className="flex w-full max-w-lg flex-col items-center gap-6 rounded-3xl border border-ink-100 bg-white px-6 py-14 text-center shadow-lift">
                     <ErrorState icon={AlertCircle} title="Page indisponible" description={state.message} />
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap justify-center gap-2">
                         <Button asChild variant="outline">
                             <a href="/exploitations">
                                 <ArrowLeft aria-hidden="true" className="size-4" />
@@ -130,7 +128,7 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
                         </Button>
                     </div>
                 </div>
-            </Frame>
+            </div>
         );
     }
 
@@ -140,7 +138,7 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
     const canManage = payload.canManage ?? false;
 
     return (
-        <Frame>
+        <>
             <AppShell
                 activeNav="/exploitations"
                 user={{ name: user.name ?? 'Utilisateur', role: user.role ?? '', initials: user.initials }}
@@ -261,10 +259,6 @@ export function FarmShowPage({ endpoint, farmName }: { endpoint: string; farmNam
                 onConfirm={handleDelete}
                 onCancel={() => setConfirmDelete(false)}
             />
-        </Frame>
+        </>
     );
-}
-
-function Frame({ children }: { children: React.ReactNode }) {
-    return <div className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 lg:py-8">{children}</div>;
 }

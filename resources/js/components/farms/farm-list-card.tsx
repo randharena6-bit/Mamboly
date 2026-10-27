@@ -4,10 +4,10 @@ import type { FarmSummary } from '../../types/farm';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 
-const statusTone: Record<string, 'brand' | 'harvest' | 'ink'> = {
+const statusTone: Record<string, 'brand' | 'warning' | 'outline'> = {
     active: 'brand',
-    inactive: 'ink',
-    pending: 'harvest',
+    inactive: 'outline',
+    pending: 'warning',
 };
 
 const statusLabel: Record<string, string> = {
@@ -46,7 +46,7 @@ export function FarmListCard({
                             {farm.name}
                         </a>
                         {status && (
-                            <Badge variant={statusTone[status] ?? 'ink'} size="sm">
+                            <Badge variant={statusTone[status] ?? 'outline'} size="sm">
                                 {statusLabel[status] ?? status}
                             </Badge>
                         )}

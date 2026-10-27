@@ -6,7 +6,7 @@ export function Card({ className, ...props }: ComponentProps<'div'>) {
     return (
         <div
             className={cn(
-                'rounded-2xl border border-ink-100 bg-white shadow-soft transition-shadow hover:shadow-card',
+                'surface rounded-2xl transition-shadow duration-300 hover:shadow-card',
                 className,
             )}
             {...props}
@@ -22,12 +22,16 @@ export function CardTitle({ className, ...props }: ComponentProps<'h2'>) {
     return (
         <h2
             className={cn(
-                'font-display text-base font-semibold tracking-tight text-ink-900 sm:text-lg',
+                'font-display text-base font-bold tracking-tight text-ink-900 sm:text-lg',
                 className,
             )}
             {...props}
         />
     );
+}
+
+export function CardDescription({ className, ...props }: ComponentProps<'p'>) {
+    return <p className={cn('text-sm leading-relaxed text-ink-500', className)} {...props} />;
 }
 
 export function CardContent({ className, ...props }: ComponentProps<'div'>) {

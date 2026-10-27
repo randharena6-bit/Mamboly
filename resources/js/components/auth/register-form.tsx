@@ -24,7 +24,7 @@ export function RegisterForm() {
 
         try {
             const { redirect } = await submitForm(routes.register, data);
-            goTo(redirect);
+            goTo(redirect ?? '/dashboard');
         } catch (error) {
             if (error instanceof FormError) {
                 setErrors(error.errors);

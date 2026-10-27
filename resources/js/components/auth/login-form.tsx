@@ -24,7 +24,7 @@ export function LoginForm() {
 
         try {
             const { redirect } = await submitForm(routes.login, data);
-            goTo(redirect);
+            goTo(redirect ?? '/dashboard');
         } catch (error) {
             if (error instanceof FormError) {
                 setErrors(error.errors);
