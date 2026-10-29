@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
+import type { ResourceRow } from '../../../resources/types';
 import type { FarmSelection, FarmWorldOptions, PlotMarker, WaterMarker } from './core';
 import {
     CROP_COLORS,
@@ -10,6 +11,7 @@ import {
     WORLD_SIZE,
     YARD,
     clamp,
+    cropPalette,
     disposeMaterial,
     heightAt,
     labelTexture,
@@ -73,6 +75,7 @@ export class FarmWorld {
     private pickables: THREE.Object3D[] = [];
     private selected: PlotMarker | WaterMarker | null = null;
     private hovered: PlotMarker | WaterMarker | null = null;
+    private highlightCropId: string | null = null;
 
     private player = new THREE.Group();
     private playerPosition = new THREE.Vector3(4, 0, 31);
@@ -493,6 +496,28 @@ export class FarmWorld {
         }
     }
 
+    private campaignForPlot(plotId: string): ResourceRow | null {
+        const campaigns = this.options.campaigns;
+
+        if (!campaigns?.length) return null;
+
+        const rank = (status: string): number =>
+            status === 'active' ? 0 : status === 'planifiee' ? 1 : status === 'suspendue' ? 2 : 3;
+        const candidates = campaigns
+            .filter((campaign) => String(campaign.plot_id) === plotId)
+            .sort((a, b) => rank(String(a.status)) - rank(String(b.status)));
+
+        return candidates[0] ?? null;
+    }
+
+    private cropForCampaign(campaign: ResourceRow | null): ResourceRow | null {
+        if (!campaign) return null;
+
+        const crop = campaign.crop;
+
+        return crop !== null && typeof crop === 'object' ? (crop as ResourceRow) : null;
+    }
+
     private buildPlots(soil: THREE.CanvasTexture): void {
         const slots = plotSlots();
         let random = 0;
@@ -502,6 +527,9 @@ export class FarmWorld {
             const statusKey = String(row.status ?? 'disponible');
             const status = STATUS[statusKey] ?? STATUS.disponible;
             const id = String(row.id);
+            const campaign = this.campaignForPlot(id);
+            const crop = this.cropForCampaign(campaign);
+            const palette = crop ? cropPalette(crop) : null;
             const baseY = rectMaxHeight(slot.x, slot.z, slot.width, slot.depth) + 0.3;
             const group = new THREE.Group();
             group.position.set(slot.x, baseY, slot.z);
@@ -530,11 +558,11 @@ export class FarmWorld {
             surface.receiveShadow = true;
             group.add(surface);
 
-            const [cropA, cropB] = CROP_COLORS[statusKey] ?? CROP_COLORS.disponible;
-            const cropHeight = statusKey === 'en_culture' ? 1.35 : statusKey === 'en_repos' ? 0.55 : 0.35;
-            const density = statusKey === 'indisponible' ? 0.35 : statusKey === 'disponible' ? 0.55 : 0.82;
-            const spacingX = statusKey === 'en_culture' ? 1.15 : 1.55;
-            const spacingZ = statusKey === 'en_culture' ? 1.35 : 1.8;
+            const [cropA, cropB] = palette ? [palette.base, palette.light] : (CROP_COLORS[statusKey] ?? CROP_COLORS.disponible);
+            const cropHeight = palette ? palette.height : statusKey === 'en_culture' ? 1.35 : statusKey === 'en_repos' ? 0.55 : 0.35;
+            const density = palette ? 0.86 : statusKey === 'indisponible' ? 0.35 : statusKey === 'disponible' ? 0.55 : 0.82;
+            const spacingX = palette || statusKey === 'en_culture' ? 1.15 : 1.55;
+            const spacingZ = palette || statusKey === 'en_culture' ? 1.35 : 1.8;
             const columns = Math.max(2, Math.floor((slot.width - 4) / spacingX));
             const lines = Math.max(2, Math.floor((slot.depth - 4) / spacingZ));
             const capacity = columns * lines;
@@ -594,7 +622,7 @@ export class FarmWorld {
             group.add(crops);
 
             const borderMaterial = new THREE.MeshStandardMaterial({
-                color: status.color,
+                color: palette?.base ?? status.color,
                 roughness: 0.85,
                 metalness: 0,
             });
@@ -614,7 +642,7 @@ export class FarmWorld {
             const highlight = new THREE.Mesh(
                 new THREE.PlaneGeometry(slot.width + 4, slot.depth + 4),
                 new THREE.MeshBasicMaterial({
-                    color: status.color,
+                    color: palette?.base ?? status.color,
                     transparent: true,
                     opacity: 0.2,
                     depthWrite: false,
@@ -631,8 +659,10 @@ export class FarmWorld {
                 new THREE.SpriteMaterial({
                     map: labelTexture(
                         String(row.code ?? `P-${index + 1}`),
-                        `${String(row.name ?? 'Parcelle')} · ${status.label}`,
-                        status.css,
+                        crop
+                            ? `${String(crop.name ?? 'Culture')} · ${campaign?.status === 'planifiee' ? 'planifiée' : 'en culture'}`
+                            : `${String(row.name ?? 'Parcelle')} · ${status.label}`,
+                        palette?.css ?? status.css,
                     ),
                     transparent: true,
                     depthTest: true,
@@ -668,6 +698,8 @@ export class FarmWorld {
                 width: slot.width,
                 depth: slot.depth,
                 status,
+                crop: crop ?? undefined,
+                campaign: campaign ?? undefined,
             };
             this.plots.push(marker);
             pick.userData.marker = marker;
@@ -1344,13 +1376,26 @@ export class FarmWorld {
             return;
         }
 
-        const kind = 'status' in marker ? 'plot' : 'water';
-        this.options.onSelect({ kind, row: marker.row } as FarmSelection);
+        if ('status' in marker) {
+            this.options.onSelect({
+                kind: 'plot',
+                row: marker.row,
+                crop: marker.crop,
+                campaign: marker.campaign,
+            });
+            return;
+        }
+
+        this.options.onSelect({ kind: 'water', row: marker.row });
+    }
+
+    private matchesCropFilter(marker: PlotMarker): boolean {
+        return this.highlightCropId !== null && marker.crop !== undefined && String(marker.crop.id) === this.highlightCropId;
     }
 
     private refreshHighlights(): void {
         for (const plot of this.plots) {
-            plot.highlight.visible = plot === this.selected || plot === this.hovered;
+            plot.highlight.visible = plot === this.selected || plot === this.hovered || this.matchesCropFilter(plot);
         }
 
         for (const source of this.water) {

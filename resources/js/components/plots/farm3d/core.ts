@@ -4,7 +4,12 @@ import type { ResourceRow } from '../../../resources/types';
 
 export type ViewMode = 'orbit' | 'walk' | 'drive';
 export type SelectionKind = 'plot' | 'water';
-export type FarmSelection = { kind: SelectionKind; row: ResourceRow } | null;
+export type FarmSelection = {
+    kind: SelectionKind;
+    row: ResourceRow;
+    crop?: ResourceRow;
+    campaign?: ResourceRow;
+} | null;
 
 export type MinimapPlot = {
     id: string;
@@ -27,6 +32,7 @@ export type FarmWorldOptions = {
     rows: ResourceRow[];
     waterSources: ResourceRow[];
     irrigations?: ResourceRow[];
+    campaigns?: ResourceRow[];
     onSelect: (selection: FarmSelection) => void;
     onTime: (hour: number) => void;
     onMinimap: (minimap: FarmMinimap) => void;
@@ -45,6 +51,8 @@ export type PlotMarker = {
     width: number;
     depth: number;
     status: StatusMeta;
+    crop?: ResourceRow;
+    campaign?: ResourceRow;
 };
 
 export type WaterMarker = {
@@ -75,6 +83,56 @@ export const CROP_COLORS: Record<string, [number, number]> = {
     en_repos: [0xc8a64f, 0xe0c36b],
     indisponible: [0x88664b, 0xa17a58],
 };
+
+export type CropKind = 'cereal' | 'legume' | 'fruit' | 'root' | 'other';
+
+export type CropPalette = {
+    base: number;
+    light: number;
+    css: string;
+    height: number;
+    kind: CropKind;
+};
+
+const CROP_RULES: Array<{ match: RegExp; kind: CropKind; hue: number }> = [
+    { match: /(bl[eé]|riz|ma[iï]s|sorgho|mil|orge|avoine|c[eé]r[eé]ale|canne)/i, kind: 'cereal', hue: 0.12 },
+    { match: /(tomate|piment|poivron|aubergine|l[eé]gume|haricot|pois|ni[eé]b[eé]|concombre|courge)/i, kind: 'legume', hue: 0.3 },
+    { match: /(fruit|mangue|banane|agrume|orange|citron|papaye|ananas|avocat|pomme|raisin)/i, kind: 'fruit', hue: 0.04 },
+    { match: /(manioc|patate|igname|carotte|betterave|racine|tubercule|navet)/i, kind: 'root', hue: 0.09 },
+    { match: /(coton|tabac|caf[eé]|cacao|th[eé]|s[eé]same|tournesol|arachide|soja)/i, kind: 'other', hue: 0.17 },
+];
+
+function hashString(value: string): number {
+    let hash = 2166136261;
+
+    for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return (hash >>> 0) / 4294967296;
+}
+
+/** Couleur, hauteur et silhouette stables d'une culture, dérivées de son nom. */
+export function cropPalette(crop: ResourceRow): CropPalette {
+    const label = `${String(crop.name ?? '')} ${String(crop.category ?? '')}`.trim();
+    const rule = CROP_RULES.find((entry) => entry.match.test(label));
+    const seed = hashString(label);
+    const hue = rule ? rule.hue + (seed - 0.5) * 0.04 : seed;
+    const kind = rule?.kind ?? 'other';
+    const height =
+        kind === 'cereal' ? 1.85 : kind === 'fruit' ? 1.55 : kind === 'legume' ? 1.15 : kind === 'root' ? 0.7 : 1.05;
+    const base = new THREE.Color().setHSL((hue + 1) % 1, 0.55, 0.42);
+    const light = new THREE.Color().setHSL((hue + 1) % 1, 0.62, 0.58);
+
+    return {
+        base: base.getHex(),
+        light: light.getHex(),
+        css: `#${base.getHexString()}`,
+        height,
+        kind,
+    };
+}
 
 export const clamp = THREE.MathUtils.clamp;
 
