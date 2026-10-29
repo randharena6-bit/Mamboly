@@ -72,6 +72,7 @@ const MODES: Array<{
 ];
 
 const STATUS_ITEMS = Object.entries(STATUS);
+const NO_ROWS: ResourceRow[] = [];
 
 function formatValue(value: unknown): string {
     if (value === null || value === undefined || value === '') return '—';
@@ -98,9 +99,9 @@ function StatusDot({ color }: { color: string }) {
 export function Plots3D({
     rows,
     waterSources,
-    irrigations = [],
-    campaigns = [],
-    crops = [],
+    irrigations = NO_ROWS,
+    campaigns = NO_ROWS,
+    crops = NO_ROWS,
     heading = 'Ferme AgriWater',
     subheading = 'Vallée des parcelles',
     showCropFilter = false,

@@ -23,6 +23,7 @@ import {
 import type { ReactNode } from 'react';
 
 import { humanize, StatusBadge } from '../components/app/status-badge';
+import { Crops3DView, CropsGalleryView } from '../components/crops/crops-views';
 import { Plots3DView, PlotsMapView } from '../components/plots/plots-views';
 import type { Option, ResourceConfig, ResourceRow } from './types';
 
@@ -333,6 +334,23 @@ export const resourceConfigs: Record<string, ResourceConfig> = {
             },
             { name: 'production_unit', label: 'Unité de production', required: true, default: 'kg', placeholder: 'kg, t…' },
             { name: 'status', label: 'Statut', type: 'select', options: CROP_STATUS, default: 'actif' },
+        ],
+        views: [
+            {
+                id: 'list',
+                label: 'Liste',
+                render: () => null,
+            },
+            {
+                id: 'terrain',
+                label: '3D terrain',
+                render: ({ rows }: { rows: ResourceRow[] }) => <Crops3DView rows={rows} />,
+            },
+            {
+                id: 'gallery',
+                label: 'Galerie 3D',
+                render: ({ rows }: { rows: ResourceRow[] }) => <CropsGalleryView rows={rows} />,
+            },
         ],
     },
 

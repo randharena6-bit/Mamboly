@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 import type { ResourceRow } from '../../../resources/types';
-import type { FarmSelection, FarmWorldOptions, PlotMarker, WaterMarker } from './core';
+import type { FarmWorldOptions, PlotMarker, WaterMarker } from './core';
 import {
     CROP_COLORS,
     POND,
