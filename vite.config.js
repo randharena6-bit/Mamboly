@@ -13,6 +13,7 @@ export default defineConfig({
                 'resources/js/auth-switch.tsx',
                 'resources/js/dashboard.tsx',
                 'resources/js/modules.tsx',
+                'resources/js/settings.tsx',
                 'resources/js/farms/index.tsx',
                 'resources/js/farms/show.tsx',
                 'resources/js/farms/create.tsx',

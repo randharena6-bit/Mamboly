@@ -2,6 +2,7 @@
 
 namespace App\Listeners;
 
+use App\Enums\AlertSeverity;
 use App\Enums\RoleName;
 use App\Events\AlertRaised;
 use App\Notifications\CriticalAlertNotification;
@@ -36,10 +37,21 @@ class SendAlertNotification
             $recipients->push($farm->manager);
         }
 
+        $alertWeight = AlertSeverity::tryFrom($alert->severity)?->weight() ?? 0;
+
+        $recipients = $recipients
+            ->unique('id')
+            ->filter(function ($user) use ($alertWeight): bool {
+                $minimum = AlertSeverity::tryFrom((string) $user->preference('alert_min_severity', 'avertissement'));
+
+                return $alertWeight >= ($minimum?->weight() ?? 0);
+            })
+            ->values();
+
         if ($recipients->isEmpty()) {
             return;
         }
 
-        Notification::send($recipients->unique('id')->values(), new CriticalAlertNotification($alert));
+        Notification::send($recipients, new CriticalAlertNotification($alert));
     }
 }

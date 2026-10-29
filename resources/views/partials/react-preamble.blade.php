@@ -13,6 +13,18 @@
     faire. Le script doit précéder les `@vite` car deux scripts `type="module"`
     s'exécutent dans l'ordre de leur apparition dans le document.
 --}}
+<script>
+    // Préférence d'apparence appliquée avant le premier rendu pour éviter un
+    // flash d'animation. La valeur est enregistrée par la page Paramètres.
+    try {
+        if (window.localStorage.getItem('agriwater.reduce_motion') === '1') {
+            document.documentElement.dataset.reduceMotion = 'true';
+        }
+    } catch (error) {
+        // Le stockage peut être indisponible en navigation privée.
+    }
+</script>
+
 @if (file_exists(public_path('hot')))
     @php($viteDevServerUrl = rtrim(trim(file_get_contents(public_path('hot'))), '/'))
     <script type="module">

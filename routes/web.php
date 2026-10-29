@@ -17,6 +17,7 @@ use App\Http\Controllers\PlotController;
 use App\Http\Controllers\PriorityIrrigationController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\RevenueController;
+use App\Http\Controllers\SettingsController;
 use App\Http\Controllers\StockMovementController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\WaterMovementController;
@@ -129,6 +130,27 @@ Route::get('/dashboard', [DashboardController::class, 'show'])
 Route::get('/dashboard/data', [DashboardController::class, 'data'])
     ->middleware('auth')
     ->name('dashboard.data');
+
+/*
+|--------------------------------------------------------------------------
+| Paramètres du compte
+|--------------------------------------------------------------------------
+|
+| Le périmètre est toujours `$request->user()` : aucune route n'accepte
+| l'identifiant d'un autre compte. La mise à jour de l'exploitation reste
+| soumise à `FarmPolicy`.
+|
+*/
+
+Route::middleware(['auth', 'db.actor'])->group(function (): void {
+    Route::get('/parametres', [SettingsController::class, 'show'])->name('settings.index');
+    Route::get('/parametres/data', [SettingsController::class, 'data'])->name('settings.data');
+    Route::patch('/parametres/profil', [SettingsController::class, 'updateProfile'])->name('settings.profile');
+    Route::patch('/parametres/mot-de-passe', [SettingsController::class, 'updatePassword'])->name('settings.password');
+    Route::patch('/parametres/preferences', [SettingsController::class, 'updatePreferences'])->name('settings.preferences');
+    Route::patch('/parametres/exploitation', [SettingsController::class, 'updateFarm'])->name('settings.farm');
+    Route::post('/parametres/sessions/fermer', [SettingsController::class, 'logoutOtherSessions'])->name('settings.sessions.close');
+});
 
 /*
 |--------------------------------------------------------------------------

@@ -26,6 +26,15 @@ class User extends Authenticatable
         'email',
         'password',
         'phone',
+        'preferences',
+    ];
+
+    /** Préférences appliquées tant que le compte n'a rien choisi. */
+    public const DEFAULT_PREFERENCES = [
+        'email_alerts' => true,
+        'alert_min_severity' => 'avertissement',
+        'reduce_motion' => false,
+        'sidebar_collapsed' => false,
     ];
 
     /**
@@ -50,7 +59,23 @@ class User extends Authenticatable
             'last_login_at' => 'datetime',
             'password' => 'hashed',
             'is_active' => 'boolean',
+            'preferences' => 'array',
         ];
+    }
+
+    /** Préférences fusionnées avec les valeurs par défaut du compte. */
+    public function preferencesOrDefaults(): array
+    {
+        return array_merge(
+            self::DEFAULT_PREFERENCES,
+            is_array($this->preferences) ? $this->preferences : [],
+        );
+    }
+
+    /** Valeur d'une préférence, avec repli sur la valeur par défaut. */
+    public function preference(string $key, mixed $default = null): mixed
+    {
+        return $this->preferencesOrDefaults()[$key] ?? $default;
     }
 
     /**

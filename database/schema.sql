@@ -363,6 +363,7 @@ CREATE TABLE users (
     password          varchar(255) NOT NULL,
     email_verified_at timestamptz,
     phone             varchar(30),
+    preferences       jsonb        NOT NULL DEFAULT '{}'::jsonb,
     is_active         boolean      NOT NULL DEFAULT true,
     last_login_at     timestamptz,
     remember_token    varchar(100),

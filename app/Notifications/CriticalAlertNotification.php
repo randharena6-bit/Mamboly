@@ -22,7 +22,11 @@ class CriticalAlertNotification extends Notification
     /** @return list<string> */
     public function via(object $notifiable): array
     {
-        return ['database', 'mail'];
+        $email = method_exists($notifiable, 'preference')
+            ? (bool) $notifiable->preference('email_alerts', true)
+            : true;
+
+        return $email ? ['database', 'mail'] : ['database'];
     }
 
     /** @return array<string, mixed> */
