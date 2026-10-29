@@ -26,7 +26,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ResourceRow } from '../../resources/types';
 import { humanize } from '../app/status-badge';
-import { STATUS } from './farm3d/core';
+import { cropPalette, STATUS } from './farm3d/core';
 import type { FarmMinimap, FarmSelection, ViewMode } from './farm3d/core';
 import { FarmWorld } from './farm3d/world';
 
@@ -34,6 +34,11 @@ export type Plots3DProps = {
     rows: ResourceRow[];
     waterSources: ResourceRow[];
     irrigations?: ResourceRow[];
+    campaigns?: ResourceRow[];
+    crops?: ResourceRow[];
+    heading?: string;
+    subheading?: string;
+    showCropFilter?: boolean;
 };
 
 const MODES: Array<{
@@ -90,18 +95,28 @@ function StatusDot({ color }: { color: string }) {
     return <span className="inline-block size-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />;
 }
 
-export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) {
+export function Plots3D({
+    rows,
+    waterSources,
+    irrigations = [],
+    campaigns = [],
+    crops = [],
+    heading = 'Ferme AgriWater',
+    subheading = 'Vallée des parcelles',
+    showCropFilter = false,
+}: Plots3DProps) {
     const wrapper = useRef<HTMLDivElement>(null);
     const canvas = useRef<HTMLCanvasElement>(null);
     const world = useRef<FarmWorld | null>(null);
     const modeRef = useRef<ViewMode>('orbit');
     const autoTimeRef = useRef(true);
+    const cropFilterRef = useRef<string | null>(null);
 
-    const dataRef = useRef({ rows, waterSources, irrigations });
-    dataRef.current = { rows, waterSources, irrigations };
+    const dataRef = useRef({ rows, waterSources, irrigations, campaigns });
+    dataRef.current = { rows, waterSources, irrigations, campaigns };
     const dataKey = useMemo(
-        () => JSON.stringify([rows, waterSources, irrigations]),
-        [rows, waterSources, irrigations],
+        () => JSON.stringify([rows, waterSources, irrigations, campaigns]),
+        [rows, waterSources, irrigations, campaigns],
     );
 
     const [ready, setReady] = useState(false);
@@ -113,8 +128,10 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
     const [minimap, setMinimap] = useState<FarmMinimap | null>(null);
     const [fullscreen, setFullscreen] = useState(false);
     const [help, setHelp] = useState(false);
+    const [cropFilter, setCropFilter] = useState<string | null>(null);
 
     autoTimeRef.current = autoTime;
+    cropFilterRef.current = cropFilter;
 
     useEffect(() => {
         const element = canvas.current;
@@ -132,6 +149,7 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                 rows: dataRef.current.rows,
                 waterSources: dataRef.current.waterSources,
                 irrigations: dataRef.current.irrigations,
+                campaigns: dataRef.current.campaigns,
                 onSelect: (next) => setSelected(next),
                 onTime: (next) => setHour(next),
                 onMinimap: (next) => setMinimap(next),
@@ -145,12 +163,22 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
         world.current = instance;
         instance.setMode(modeRef.current);
         instance.setAutoTime(autoTimeRef.current);
+        instance.setCropFilter(cropFilterRef.current);
 
         return () => {
             instance.dispose();
             world.current = null;
         };
     }, [dataKey]);
+
+    useEffect(() => {
+        if (cropFilter === null) {
+            world.current?.setCropFilter(null);
+            return;
+        }
+
+        world.current?.focusCrop(cropFilter);
+    }, [cropFilter]);
 
     useEffect(() => {
         const onChange = () => setFullscreen(Boolean(document.fullscreenElement));
@@ -161,6 +189,41 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
 
     const activeMode = MODES.find((entry) => entry.id === mode) ?? MODES[0];
     const located = rows.filter((row) => Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude))).length;
+    const cropIdsWithCampaign = useMemo(() => {
+        const ids = new Set<string>();
+
+        for (const campaign of campaigns) {
+            const crop = campaign.crop;
+            const id =
+                crop !== null && typeof crop === 'object'
+                    ? (crop as ResourceRow).id
+                    : campaign.crop_id;
+
+            if (id !== null && id !== undefined) ids.add(String(id));
+        }
+
+        return ids;
+    }, [campaigns]);
+    const availableCrops = useMemo(
+        () => crops.filter((crop) => cropIdsWithCampaign.has(String(crop.id))),
+        [crops, cropIdsWithCampaign],
+    );
+    const cropPlotCounts = useMemo(() => {
+        const counts = new Map<string, number>();
+
+        for (const campaign of campaigns) {
+            const crop = campaign.crop;
+            const id =
+                crop !== null && typeof crop === 'object'
+                    ? (crop as ResourceRow).id
+                    : campaign.crop_id;
+
+            if (id === null || id === undefined) continue;
+            counts.set(String(id), (counts.get(String(id)) ?? 0) + 1);
+        }
+
+        return counts;
+    }, [campaigns]);
     const changeMode = (next: ViewMode) => {
         modeRef.current = next;
         setMode(next);
@@ -245,8 +308,8 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                         <Wheat className="size-5 text-emerald-300" />
                     </span>
                     <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">Ferme AgriWater</p>
-                        <p className="truncate font-display text-sm font-semibold text-white">Vallée des parcelles</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/45">{heading}</p>
+                        <p className="truncate font-display text-sm font-semibold text-white">{subheading}</p>
                     </div>
                     <span className="hidden shrink-0 rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-white/70 sm:inline">
                         {rows.length} parcelle{rows.length > 1 ? 's' : ''}
@@ -305,6 +368,76 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
                 </div>
             </div>
 
+            {/* Filtre par culture */}
+            {showCropFilter && availableCrops.length > 0 && (
+                <>
+                    <div className="pointer-events-auto absolute top-3 left-3 z-20 md:hidden">
+                        <label className="sr-only" htmlFor="crop-filter-mobile">Filtrer par culture</label>
+                        <select
+                            id="crop-filter-mobile"
+                            value={cropFilter ?? ''}
+                            onChange={(event) => setCropFilter(event.target.value === '' ? null : event.target.value)}
+                            className="rounded-xl border border-white/15 bg-slate-950/80 px-3 py-2 text-xs font-semibold text-white shadow-xl backdrop-blur-xl"
+                        >
+                            <option value="">Toutes les cultures</option>
+                            {availableCrops.map((crop) => (
+                                <option key={String(crop.id)} value={String(crop.id)}>
+                                    {String(crop.name ?? 'Culture')}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="pointer-events-none absolute top-20 left-3 z-20 hidden w-[16rem] max-w-[calc(100%-1.5rem)] md:block">
+                        <div className="pointer-events-auto overflow-hidden rounded-2xl border border-white/15 bg-slate-950/72 text-white shadow-2xl backdrop-blur-xl">
+                            <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3.5 py-3">
+                                <div>
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/45">Filtrer par culture</p>
+                                    <p className="mt-0.5 font-display text-sm font-semibold">{availableCrops.length} culture{availableCrops.length > 1 ? 's' : ''} au champ</p>
+                                </div>
+                                <Sprout className="size-4 text-emerald-300" />
+                            </div>
+                            <div className="max-h-64 space-y-1 overflow-y-auto p-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setCropFilter(null)}
+                                    className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left text-xs transition ${
+                                        cropFilter === null ? 'bg-emerald-500 text-emerald-950' : 'text-white/70 hover:bg-white/10 hover:text-white'
+                                    }`}
+                                >
+                                    <span className="flex items-center gap-2 font-semibold">
+                                        <span className="inline-block size-2.5 rounded-full bg-white/70" />
+                                        Toutes les cultures
+                                    </span>
+                                    <span className="tabular-nums opacity-70">{campaigns.length}</span>
+                                </button>
+                                {availableCrops.map((crop) => {
+                                    const palette = cropPalette(crop);
+                                    const active = cropFilter === String(crop.id);
+
+                                    return (
+                                        <button
+                                            key={String(crop.id)}
+                                            type="button"
+                                            onClick={() => setCropFilter(active ? null : String(crop.id))}
+                                            className={`flex w-full items-center justify-between gap-2 rounded-xl px-2.5 py-2 text-left text-xs transition ${
+                                                active ? 'bg-white text-slate-900 shadow-lg' : 'text-white/70 hover:bg-white/10 hover:text-white'
+                                            }`}
+                                        >
+                                            <span className="flex min-w-0 items-center gap-2">
+                                                <span className="inline-block size-2.5 shrink-0 rounded-full" style={{ backgroundColor: palette.css }} />
+                                                <span className="truncate font-semibold">{String(crop.name ?? 'Culture')}</span>
+                                            </span>
+                                            <span className="shrink-0 tabular-nums opacity-70">{cropPlotCounts.get(String(crop.id)) ?? 0}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                </>
+            )}
+
             {/* Sélection / tableau de bord */}
             <div className="pointer-events-none absolute top-20 right-3 z-20 w-[21rem] max-w-[calc(100%-1.5rem)] sm:top-24">
                 <div className="pointer-events-auto overflow-hidden rounded-2xl border border-white/15 bg-slate-950/72 text-white shadow-2xl backdrop-blur-xl">
@@ -324,9 +457,19 @@ export function Plots3D({ rows, waterSources, irrigations = [] }: Plots3DProps) 
 
                             <div className="mt-4 grid grid-cols-2 gap-2">
                                 <Metric icon={Sprout} label="Parcelles" value={String(rows.length)} />
-                                <Metric icon={Droplets} label="Points d’eau" value={String(waterSources.length)} />
-                                <Metric icon={Waves} label="Irrigations" value={String(irrigations.length)} />
-                                <Metric icon={Crosshair} label="Géolocalisées" value={`${located}/${rows.length}`} />
+                                {campaigns.length > 0 ? (
+                                    <>
+                                        <Metric icon={Wheat} label="Cultures" value={String(availableCrops.length)} />
+                                        <Metric icon={Compass} label="Campagnes" value={String(campaigns.length)} />
+                                        <Metric icon={Crosshair} label="Géolocalisées" value={`${located}/${rows.length}`} />
+                                    </>
+                                ) : (
+                                    <>
+                                        <Metric icon={Droplets} label="Points d’eau" value={String(waterSources.length)} />
+                                        <Metric icon={Waves} label="Irrigations" value={String(irrigations.length)} />
+                                        <Metric icon={Crosshair} label="Géolocalisées" value={`${located}/${rows.length}`} />
+                                    </>
+                                )}
                             </div>
 
                             <div className="mt-4 border-t border-white/10 pt-3">
@@ -517,6 +660,9 @@ function SelectionPanel({
 
     const row = selection.row;
     const status = STATUS[String(row.status)] ?? STATUS.disponible;
+    const crop = selection.crop;
+    const campaign = selection.campaign;
+    const palette = crop ? cropPalette(crop) : null;
     const moisture = Number(row.soil_moisture);
     const moistureRatio = Number.isFinite(moisture) ? clampPercent(moisture) : 0;
     const moistureColor = moistureRatio < 35 ? 'bg-amber-400' : moistureRatio < 65 ? 'bg-sky-400' : 'bg-emerald-400';
@@ -548,6 +694,29 @@ function SelectionPanel({
                     <Detail label="Sol" value={String(row.soil_type ?? '—')} />
                     <Detail label="Localisation" value={String(row.location ?? '—')} />
                 </div>
+
+                {crop && palette && (
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <div className="flex items-center justify-between gap-2">
+                            <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-white/45">
+                                <Wheat className="size-3.5" style={{ color: palette.css }} />
+                                Culture au champ
+                            </p>
+                            <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ backgroundColor: `${palette.css}22`, color: palette.css }}>
+                                {humanize(String(crop.category ?? '—'))}
+                            </span>
+                        </div>
+                        <p className="mt-2 font-display text-base font-semibold" style={{ color: palette.css }}>
+                            {String(crop.name ?? 'Culture')}
+                        </p>
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                            <Detail label="Durée" value={`${String(crop.estimated_duration_days ?? '—')} j`} />
+                            <Detail label="Besoin eau" value={`${String(crop.water_requirement ?? '—')} L/m²`} />
+                            <Detail label="Campagne" value={String(campaign?.code ?? campaign?.name ?? '—')} />
+                            <Detail label="Statut" value={humanize(String(campaign?.status ?? '—'))} />
+                        </div>
+                    </div>
+                )}
 
                 <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
                     <div className="flex items-center justify-between gap-2">

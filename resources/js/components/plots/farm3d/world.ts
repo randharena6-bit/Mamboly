@@ -1580,6 +1580,37 @@ export class FarmWorld {
         this.options.onSelect(null);
     }
 
+    public setCropFilter(cropId: string | null): void {
+        this.highlightCropId = cropId;
+        this.refreshHighlights();
+    }
+
+    public focusCrop(cropId: string | null): void {
+        this.highlightCropId = cropId;
+        this.refreshHighlights();
+
+        const matches =
+            cropId === null ? this.plots : this.plots.filter((plot) => plot.crop !== undefined && String(plot.crop.id) === cropId);
+
+        if (matches.length === 0) return;
+
+        const center = matches
+            .reduce((accumulator, plot) => accumulator.add(plot.position), new THREE.Vector3())
+            .multiplyScalar(1 / matches.length);
+        const spread = matches.reduce(
+            (maximum, plot) => Math.max(maximum, plot.position.distanceTo(center) + Math.max(plot.width, plot.depth)),
+            24,
+        );
+        const distance = clamp(spread * 1.7, 48, 175);
+
+        this.mode = 'orbit';
+        this.orbit.enabled = true;
+        this.player.visible = true;
+        this.orbit.target.copy(center).add(new THREE.Vector3(0, 4, 0));
+        this.camera.position.copy(center).add(new THREE.Vector3(distance * 0.62, distance * 0.78, distance * 0.62));
+        this.orbit.update();
+    }
+
     public focusSelection(kind: 'plot' | 'water', id: string): void {
         const marker = kind === 'plot' ? this.plots.find((plot) => plot.id === id) : this.water.find((source) => source.id === id);
         if (!marker) return;
@@ -1666,6 +1697,16 @@ export class FarmWorld {
 
         if (this.pondWater) {
             this.pondWater.position.y = this.pondBaseY + 0.16 + Math.sin(elapsed * 1.4) * 0.025;
+        }
+
+        if (this.highlightCropId !== null) {
+            const pulse = 0.22 + Math.sin(elapsed * 2.6) * 0.1;
+
+            for (const plot of this.plots) {
+                if (!this.matchesCropFilter(plot)) continue;
+                const material = plot.highlight.material as THREE.MeshBasicMaterial;
+                material.opacity = pulse;
+            }
         }
 
         this.sky.position.copy(this.camera.position);
