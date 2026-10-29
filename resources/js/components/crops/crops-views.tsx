@@ -9,6 +9,7 @@ const CropsGallery3D = lazy(() =>
 );
 
 const LAYERS_REFRESH_MS = 60_000;
+const NO_WATER: ResourceRow[] = [];
 
 function Loading({ label }: { label: string }) {
     return (
@@ -63,7 +64,7 @@ export function Crops3DView({ rows }: { rows: ResourceRow[] }) {
         <Suspense fallback={<Loading label="Chargement de la carte des cultures…" />}>
             <Plots3D
                 rows={layers.plots}
-                waterSources={[]}
+                waterSources={NO_WATER}
                 campaigns={layers.campaigns}
                 crops={rows}
                 heading="Cultures AgriWater"
