@@ -165,6 +165,7 @@ export function Plots3D({
         instance.setMode(modeRef.current);
         instance.setAutoTime(autoTimeRef.current);
         instance.setCropFilter(cropFilterRef.current);
+        if (cropFilterRef.current !== null) instance.focusCrop(cropFilterRef.current);
 
         return () => {
             instance.dispose();
@@ -178,6 +179,8 @@ export function Plots3D({
             return;
         }
 
+        modeRef.current = 'orbit';
+        setMode('orbit');
         world.current?.focusCrop(cropFilter);
     }, [cropFilter]);
 

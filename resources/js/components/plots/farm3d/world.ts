@@ -34,6 +34,18 @@ import {
     createWindmill,
 } from './props';
 
+function campaignStatusLabel(status: string): string {
+    return status === 'planifiee'
+        ? 'planifiée'
+        : status === 'active'
+          ? 'en culture'
+          : status === 'suspendue'
+            ? 'suspendue'
+            : status === 'terminee'
+              ? 'terminée'
+              : status;
+}
+
 export class FarmWorld {
     readonly scene: THREE.Scene;
     readonly camera: THREE.PerspectiveCamera;
@@ -502,9 +514,17 @@ export class FarmWorld {
         if (!campaigns?.length) return null;
 
         const rank = (status: string): number =>
-            status === 'active' ? 0 : status === 'planifiee' ? 1 : status === 'suspendue' ? 2 : 3;
+            status === 'active'
+                ? 0
+                : status === 'planifiee'
+                  ? 1
+                  : status === 'suspendue'
+                    ? 2
+                    : status === 'terminee'
+                      ? 3
+                      : 4;
         const candidates = campaigns
-            .filter((campaign) => String(campaign.plot_id) === plotId)
+            .filter((campaign) => String(campaign.plot_id) === plotId && String(campaign.status) !== 'annulee')
             .sort((a, b) => rank(String(a.status)) - rank(String(b.status)));
 
         return candidates[0] ?? null;
@@ -660,7 +680,7 @@ export class FarmWorld {
                     map: labelTexture(
                         String(row.code ?? `P-${index + 1}`),
                         crop
-                            ? `${String(crop.name ?? 'Culture')} · ${campaign?.status === 'planifiee' ? 'planifiée' : 'en culture'}`
+                            ? `${String(crop.name ?? 'Culture')} · ${campaignStatusLabel(String(campaign?.status ?? 'active'))}`
                             : `${String(row.name ?? 'Parcelle')} · ${status.label}`,
                         palette?.css ?? status.css,
                     ),
